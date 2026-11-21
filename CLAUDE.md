@@ -22,7 +22,8 @@ do next. Update it when you finish a piece of work.
 Phases 1–2 are done and building on CI (commit `071924d`): links, MAVLink v1/v2, heartbeat,
 stream requests, tlog, HUD, map, status.
 
-Written but NOT yet committed or built (one push will build all of it):
+Commit `813dc59` (CI run #4) builds green: 26/26 MAVLinkKit tests, 1.44 MB IPA. It contains the
+items below. NOT yet tested on a real iPad / vehicle:
 - The ExpressLRS WiFi link (below).
 - **Phase 3: parameters and commands.**
   - `MAVLinkKit/ParameterProtocol.swift`: `ParameterSession`, a pure state machine for download,
