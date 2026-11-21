@@ -1,7 +1,7 @@
-// Landscape iPad layout modelled on Mission Planner's Flight Data screen:
-//   top status bar (connect, mode, armed, GPS, battery, link quality)
-//   left column: HUD over the Quick/Status/Messages tabs
-//   right: map
+// Landscape iPad layout modelled on Mission Planner:
+//   top status bar (connect, screen switch DATA / CONFIG, mode, armed, GPS, battery, link quality)
+//   DATA:   left column HUD over the Quick/Actions/Status/Messages tabs, map on the right
+//   CONFIG: full parameter list
 
 import MAVLinkKit
 import SwiftUI
@@ -11,15 +11,31 @@ struct RootView: View {
     @EnvironmentObject var vehicle: VehicleModel
     @State private var showConnect = false
     @State private var tab = Tab.quick
+    @State private var screen = Screen.data
 
     enum Tab: String, CaseIterable, Identifiable {
-        case quick = "Quick", status = "Status", messages = "Messages"
+        case quick = "Quick", actions = "Actions", status = "Status", messages = "Messages"
+        var id: String { rawValue }
+    }
+
+    enum Screen: String, CaseIterable, Identifiable {
+        case data = "Flight Data", config = "Parameters"
         var id: String { rawValue }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            StatusBar(showConnect: $showConnect)
+            StatusBar(showConnect: $showConnect, screen: $screen)
+            switch screen {
+            case .data: flightData
+            case .config: ParametersView()
+            }
+        }
+        .sheet(isPresented: $showConnect) { ConnectView() }
+        .onAppear { if !link.state.isActive { showConnect = true } }
+    }
+
+    private var flightData: some View {
             GeometryReader { geo in
                 HStack(spacing: 0) {
                     VStack(spacing: 8) {
@@ -36,6 +52,7 @@ struct RootView: View {
                         Group {
                             switch tab {
                             case .quick: ScrollView { QuickView() }
+                            case .actions: ScrollView { ActionsView() }
                             case .status: StatusListView()
                             case .messages: MessagesView()
                             }
@@ -48,9 +65,6 @@ struct RootView: View {
                     FlightMapView()
                 }
             }
-        }
-        .sheet(isPresented: $showConnect) { ConnectView() }
-        .onAppear { if !link.state.isActive { showConnect = true } }
     }
 }
 
@@ -58,6 +72,7 @@ struct StatusBar: View {
     @EnvironmentObject var link: LinkManager
     @EnvironmentObject var vehicle: VehicleModel
     @Binding var showConnect: Bool
+    @Binding var screen: RootView.Screen
 
     var body: some View {
         HStack(spacing: 16) {
@@ -78,6 +93,12 @@ struct StatusBar: View {
                     .font(.caption2).foregroundColor(.secondary)
             }
             .frame(width: 220, alignment: .leading)
+
+            Picker("Screen", selection: $screen) {
+                ForEach(RootView.Screen.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 240)
 
             Spacer()
 

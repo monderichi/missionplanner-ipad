@@ -252,11 +252,17 @@ public final class MAVLinkSender {
         self.version = version
     }
 
-    public func pack<M: MAVLinkMessage>(_ message: M) -> [UInt8] {
+    /// Returns the next sequence number and advances it (thread-safe).
+    public func takeSequence() -> UInt8 {
         lock.lock()
+        defer { lock.unlock() }
         let seq = nextSequence
         nextSequence &+= 1
-        lock.unlock()
+        return seq
+    }
+
+    public func pack<M: MAVLinkMessage>(_ message: M) -> [UInt8] {
+        let seq = takeSequence()
         return MAVLinkFraming.encode(message, version: version, sequence: seq,
                                      systemID: systemID, componentID: componentID)
     }

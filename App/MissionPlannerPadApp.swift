@@ -13,6 +13,8 @@ struct MissionPlannerPadApp: App {
             RootView()
                 .environmentObject(link)
                 .environmentObject(link.vehicle)
+                .environmentObject(link.params)
+                .environmentObject(link.commands)
         }
     }
 }

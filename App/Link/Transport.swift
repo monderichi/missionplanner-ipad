@@ -42,6 +42,7 @@ enum LinkKind: String, CaseIterable, Identifiable, Codable {
     case udpListen = "UDP listen"
     case udpConnect = "UDP connect"
     case tcp = "TCP"
+    case elrs = "ExpressLRS WiFi"
     case ble = "Bluetooth LE"
 
     var id: String { rawValue }
@@ -51,9 +52,11 @@ enum LinkKind: String, CaseIterable, Identifiable, Codable {
         case .udpListen:
             return "Waits for the vehicle on this iPad's port (default 14550). Use for ESP8266/ESP32 telemetry, MAVLink-Router or SITL sending to the iPad's IP."
         case .udpConnect:
-            return "Sends to a fixed host:port first, then talks to whoever answers. Use for bridges that wait for a GCS (e.g. DroneBridge, 192.168.4.1:14550)."
+            return "Sends to a fixed host:port from the iPad port (default 14550) and listens for the answers there. Use for Wi-Fi bridges that wait for a GCS: MAVESP8266 (192.168.4.1:14555), DroneBridge, mavlink-router."
         case .tcp:
             return "Connects to a TCP server, e.g. SITL on 5760 or a companion computer / ESP bridge on 5760/2000."
+        case .elrs:
+            return "ExpressLRS TX Backpack in MAVLink mode. Join the \"ExpressLRS TX Backpack ……\" Wi-Fi (password expresslrs). The iPad sends to the backpack (10.0.0.1:14555) and receives on local port 14550."
         case .ble:
             return "Bluetooth LE serial bridges using the Nordic UART service or HM-10 style FFE0/FFE1."
         }
@@ -63,6 +66,7 @@ enum LinkKind: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .udpListen, .udpConnect: return 14550
         case .tcp: return 5760
+        case .elrs: return 14555
         case .ble: return 0
         }
     }

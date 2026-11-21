@@ -10,6 +10,7 @@ struct ConnectView: View {
     @AppStorage("link.kind") private var kindRaw = LinkKind.udpListen.rawValue
     @AppStorage("link.host") private var host = "192.168.4.1"
     @AppStorage("link.port") private var portText = "14550"
+    @AppStorage("link.localPort") private var localPortText = "14550"
     @AppStorage("link.ble") private var bleIDText = ""
 
     private var kind: LinkKind { LinkKind(rawValue: kindRaw) ?? .udpListen }
@@ -24,6 +25,10 @@ struct ConnectView: View {
                     .pickerStyle(.segmented)
                     .onChange(of: kindRaw) { _ in
                         portText = "\(kind.defaultPort)"
+                        if kind == .elrs {
+                            host = "10.0.0.1"
+                            localPortText = "14550"
+                        }
                         if kind == .ble { scanner.start() } else { scanner.stop() }
                     }
                 } footer: {
@@ -42,6 +47,28 @@ struct ConnectView: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         TextField("Port", text: $portText).keyboardType(.numberPad)
+                        if kind == .udpConnect {
+                            LabeledContent("iPad port") {
+                                TextField("14550", text: $localPortText).keyboardType(.numberPad).multilineTextAlignment(.trailing)
+                            }
+                        }
+                    }
+                case .elrs:
+                    Section {
+                        TextField("Backpack IP", text: $host)
+                            .keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        LabeledContent("Backpack port") {
+                            TextField("14555", text: $portText).keyboardType(.numberPad).multilineTextAlignment(.trailing)
+                        }
+                        LabeledContent("iPad port") {
+                            TextField("14550", text: $localPortText).keyboardType(.numberPad).multilineTextAlignment(.trailing)
+                        }
+                    } header: {
+                        Text("ExpressLRS backpack")
+                    } footer: {
+                        Text("Backpack port = its MAVLink listen port, iPad port = its send port. Check them at http://10.0.0.1/mavlink in Safari if the link stays silent.")
                     }
                 case .ble:
                     Section {
@@ -84,6 +111,7 @@ struct ConnectView: View {
                     Button(link.state.isActive ? "Reconnect" : "Connect") {
                         link.connect(kind: kind, host: host.trimmingCharacters(in: .whitespaces),
                                      port: UInt16(portText) ?? kind.defaultPort,
+                                     localPort: UInt16(localPortText) ?? 14550,
                                      bleDevice: UUID(uuidString: bleIDText))
                         dismiss()
                     }

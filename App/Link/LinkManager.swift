@@ -18,13 +18,25 @@ final class LinkManager: ObservableObject {
     @Published var recordTLog = true
 
     let vehicle = VehicleModel()
+    let params = ParameterStore()
+    let commands = CommandCenter()
 
     /// Stream rates in Hz requested on connect, like Mission Planner's defaults
     /// (Config > Planner > Telemetry rates / SRx_* params).
-    var streamRates: [MAVDataStream: UInt16] = [
+    static let defaultStreamRates: [MAVDataStream: UInt16] = [
         .rawSensors: 2, .extendedStatus: 2, .rcChannels: 2, .position: 3,
         .extra1: 10, .extra2: 10, .extra3: 2,
     ]
+
+    /// ExpressLRS MAVLink telemetry is a few kB/s at best (shared with RC on a 1:2 ratio).
+    /// REQUEST_DATA_STREAM overrides the FC's SRx_* rates for that port, so ask for little:
+    /// HUD at 4 Hz, status/position at 1-2 Hz, and stop RAW_SENSORS (IMU/baro) entirely.
+    static let narrowLinkStreamRates: [MAVDataStream: UInt16] = [
+        .rawSensors: 0, .extendedStatus: 1, .rcChannels: 1, .position: 2,
+        .extra1: 4, .extra2: 2, .extra3: 1,
+    ]
+
+    var streamRates: [MAVDataStream: UInt16] = LinkManager.defaultStreamRates
 
     private var transport: MAVTransport?
     private let parser = MAVLinkParser()
@@ -32,17 +44,32 @@ final class LinkManager: ObservableObject {
     private let ioQueue = DispatchQueue(label: "link.io")
     private var tlog: TLogWriter?
     private var heartbeatTimer: DispatchSourceTimer?
+    private var controlTimer: DispatchSourceTimer?
     private var pendingBytes = 0
+    private var narrowLink = false
+    /// sysid the parameter/command sessions are attached to (survives short link dropouts).
+    private var attachedSystem: UInt8?
+    private var redownloadAfterReboot = false
+
+    init() {
+        params.send = { [weak self] m in self?.send(any: m) }
+        commands.send = { [weak self] m in self?.send(any: m) }
+        commands.onRebootAccepted = { [weak self] in
+            self?.redownloadAfterReboot = true
+            self?.params.markRebooted()
+        }
+    }
 
     // MARK: connect / disconnect
 
-    func connect(kind: LinkKind, host: String, port: UInt16, bleDevice: UUID?) {
+    func connect(kind: LinkKind, host: String, port: UInt16, localPort: UInt16 = 14550, bleDevice: UUID?) {
         disconnect()
         let t: MAVTransport
         switch kind {
         case .udpListen: t = UDPListenTransport(port: port)
-        case .udpConnect: t = NWClientTransport(host: host, port: port, proto: .udp)
+        case .udpConnect: t = NWClientTransport(host: host, port: port, proto: .udp, localPort: localPort)
         case .tcp: t = NWClientTransport(host: host, port: port, proto: .tcp)
+        case .elrs: t = NWClientTransport(host: host, port: port, proto: .udp, localPort: localPort, wifiOnly: true)
         case .ble:
             guard let id = bleDevice else {
                 state = .failed("Pick a Bluetooth device first")
@@ -50,6 +77,8 @@ final class LinkManager: ObservableObject {
             }
             t = BLETransport(deviceID: id)
         }
+        narrowLink = kind == .elrs || kind == .ble
+        streamRates = narrowLink ? Self.narrowLinkStreamRates : Self.defaultStreamRates
 
         ioQueue.sync {
             parser.reset()
@@ -83,7 +112,14 @@ final class LinkManager: ObservableObject {
     func disconnect() {
         heartbeatTimer?.cancel()
         heartbeatTimer = nil
+        controlTimer?.cancel()
+        controlTimer = nil
+        params.detach()
+        commands.detach()
+        attachedSystem = nil
+        redownloadAfterReboot = false
         transport?.onReceive = nil
+        transport?.onStateChange = nil // a late callback from the old link must not overwrite the new state
         transport?.close()
         transport = nil
         ioQueue.sync {
@@ -101,6 +137,16 @@ final class LinkManager: ObservableObject {
         let bytes = sender.pack(message)
         ioQueue.async {
             self.tlog?.write(raw: bytes) // Mission Planner logs outgoing packets too
+            transport.send(Data(bytes))
+        }
+    }
+
+    /// For messages whose concrete type is only known at runtime (parameter/command sessions).
+    func send(any message: MAVLinkMessage) {
+        guard let transport else { return }
+        let bytes = sender.pack(any: message)
+        ioQueue.async {
+            self.tlog?.write(raw: bytes)
             transport.send(Data(bytes))
         }
     }
@@ -138,6 +184,32 @@ final class LinkManager: ObservableObject {
         }
         heartbeatTimer = timer
         timer.resume()
+
+        // 4 Hz: parameter/command retries and timeouts
+        let control = DispatchSource.makeTimerSource(queue: .main)
+        control.schedule(deadline: .now() + 0.25, repeating: 0.25)
+        control.setEventHandler { [weak self] in
+            self?.params.tick()
+            self?.commands.tick()
+        }
+        controlTimer = control
+        control.resume()
+    }
+
+    /// Main queue. A vehicle (re)appeared: attach sessions the first time we see this sysid,
+    /// re-download parameters after a reboot, and (re)request streams every time.
+    private func vehicleAppeared() {
+        guard let sys = vehicle.systemID else { return }
+        let comp = vehicle.componentID
+        if attachedSystem != sys {
+            attachedSystem = sys
+            params.attach(systemID: sys, componentID: comp, vehicleType: vehicle.vehicleType, narrowLink: narrowLink)
+            commands.attach(systemID: sys, componentID: comp, narrowLink: narrowLink)
+        } else if redownloadAfterReboot {
+            redownloadAfterReboot = false
+            params.download()
+        }
+        requestDataStreams()
     }
 
     /// Runs on ioQueue.
@@ -156,8 +228,14 @@ final class LinkManager: ObservableObject {
                     self.vehicle.handleRadio(p)
                 }
                 if self.vehicle.handle(p) { newVehicle = true }
+                guard p.systemID == self.attachedSystem else { continue }
+                if p.messageID == MAV.ParamValue.mavInfo.id, let m = p.decode(MAV.ParamValue.self) {
+                    self.params.handle(m)
+                } else if p.messageID == MAV.CommandAck.mavInfo.id, let m = p.decode(MAV.CommandAck.self) {
+                    self.commands.handle(m)
+                }
             }
-            if newVehicle { self.requestDataStreams() }
+            if newVehicle { self.vehicleAppeared() }
         }
     }
 }
