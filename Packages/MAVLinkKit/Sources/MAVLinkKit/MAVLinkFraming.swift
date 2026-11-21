@@ -174,6 +174,8 @@ public final class MAVLinkParser {
         public var bytesDiscarded = 0
         /// Estimated from sequence-number gaps, per (sysid, compid), like MAVState.packetslost.
         public var packetsLost = 0
+
+        public init() {}
     }
 
     public private(set) var stats = Stats()

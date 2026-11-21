@@ -23,13 +23,13 @@ struct HUDView: View {
 
     var body: some View {
         Canvas { ctx, size in
-            let w = size.width, h = size.height
-            let center = CGPoint(x: w / 2, y: h / 2)
-            let pxPerDeg = h / 45 // ±22.5° of pitch visible
+            let w = Double(size.width), h = Double(size.height)
+            let cx: Double = w / 2, cy: Double = h / 2
+            let pxPerDeg: Double = h / 45 // ±22.5° of pitch visible
 
             // horizon
             var horizon = ctx
-            horizon.translateBy(x: center.x, y: center.y)
+            horizon.translateBy(x: cx, y: cy)
             horizon.rotate(by: .degrees(-roll))
             horizon.translateBy(x: 0, y: pitch * pxPerDeg)
             let big = max(w, h) * 4
@@ -52,11 +52,12 @@ struct HUDView: View {
             }
 
             // roll scale (fixed) and pointer (rotates)
-            let r = min(w, h) * 0.38
+            let r = Double(min(w, h)) * 0.38
             var scale = ctx
-            scale.translateBy(x: center.x, y: center.y)
-            for a in [-60.0, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60] {
-                let rad = (a - 90) * .pi / 180
+            scale.translateBy(x: cx, y: cy)
+            let rollTicks: [Double] = [-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60]
+            for a in rollTicks {
+                let rad: Double = (a - 90) * Double.pi / 180
                 let len: Double = (a.truncatingRemainder(dividingBy: 30) == 0) ? 12 : 7
                 let p1 = CGPoint(x: cos(rad) * r, y: sin(rad) * r)
                 let p2 = CGPoint(x: cos(rad) * (r - len), y: sin(rad) * (r - len))
@@ -73,20 +74,20 @@ struct HUDView: View {
 
             // aircraft symbol
             var plane = Path()
-            plane.move(to: CGPoint(x: center.x - w * 0.18, y: center.y))
-            plane.addLine(to: CGPoint(x: center.x - w * 0.06, y: center.y))
-            plane.addLine(to: CGPoint(x: center.x, y: center.y + 10))
-            plane.addLine(to: CGPoint(x: center.x + w * 0.06, y: center.y))
-            plane.addLine(to: CGPoint(x: center.x + w * 0.18, y: center.y))
+            plane.move(to: CGPoint(x: cx - w * 0.18, y: cy))
+            plane.addLine(to: CGPoint(x: cx - w * 0.06, y: cy))
+            plane.addLine(to: CGPoint(x: cx, y: cy + 10))
+            plane.addLine(to: CGPoint(x: cx + w * 0.06, y: cy))
+            plane.addLine(to: CGPoint(x: cx + w * 0.18, y: cy))
             ctx.stroke(plane, with: .color(.yellow), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
 
             // heading tape
             ctx.fill(Path(CGRect(x: 0, y: 0, width: w, height: 26)), with: .color(.black.opacity(0.35)))
-            let pxPerHdg = w / 90
+            let pxPerHdg: Double = w / 90
             let names = [0: "N", 45: "NE", 90: "E", 135: "SE", 180: "S", 225: "SW", 270: "W", 315: "NW"]
             let start = Int((heading - 45).rounded(.down)), end = Int((heading + 45).rounded(.up))
             for d in start...end where d % 5 == 0 {
-                let x = center.x + (Double(d) - heading) * pxPerHdg
+                let x = cx + (Double(d) - heading) * pxPerHdg
                 let norm = ((d % 360) + 360) % 360
                 let tall = norm % 15 == 0
                 ctx.stroke(line(from: CGPoint(x: x, y: 26), to: CGPoint(x: x, y: tall ? 16 : 21)), with: .color(.white), lineWidth: 1)
@@ -96,12 +97,12 @@ struct HUDView: View {
                 }
             }
             ctx.draw(Text(String(format: "%03.0f", heading)).font(.system(size: 13, weight: .heavy).monospacedDigit())
-                        .foregroundColor(.yellow), at: CGPoint(x: center.x, y: 38))
+                        .foregroundColor(.yellow), at: CGPoint(x: cx, y: 38))
 
             // speed (left) / altitude (right) boxes
-            let boxW = 78.0, boxH = 44.0
-            let leftBox = CGRect(x: 8, y: center.y - boxH / 2, width: boxW, height: boxH)
-            let rightBox = CGRect(x: w - boxW - 8, y: center.y - boxH / 2, width: boxW, height: boxH)
+            let boxW: Double = 78, boxH: Double = 44
+            let leftBox = CGRect(x: 8, y: cy - boxH / 2, width: boxW, height: boxH)
+            let rightBox = CGRect(x: w - boxW - 8, y: cy - boxH / 2, width: boxW, height: boxH)
             for box in [leftBox, rightBox] {
                 ctx.fill(Path(roundedRect: box, cornerRadius: 6), with: .color(.black.opacity(0.55)))
             }
@@ -116,12 +117,12 @@ struct HUDView: View {
 
             // armed / mode
             ctx.draw(Text(armed ? "ARMED" : "DISARMED").font(.system(size: 15, weight: .heavy))
-                        .foregroundColor(armed ? .red : .green), at: CGPoint(x: center.x, y: h - 40))
+                        .foregroundColor(armed ? .red : .green), at: CGPoint(x: cx, y: h - 40))
             ctx.draw(Text(mode).font(.system(size: 14, weight: .bold)).foregroundColor(.white),
-                     at: CGPoint(x: center.x, y: h - 20))
+                     at: CGPoint(x: cx, y: h - 20))
 
             if !linkAlive {
-                let banner = CGRect(x: w * 0.2, y: center.y - 50 - 30, width: w * 0.6, height: 30)
+                let banner = CGRect(x: w * 0.2, y: cy - 50 - 30, width: w * 0.6, height: 30)
                 ctx.fill(Path(roundedRect: banner, cornerRadius: 6), with: .color(.red.opacity(0.85)))
                 ctx.draw(Text("NO HEARTBEAT").font(.system(size: 16, weight: .heavy)).foregroundColor(.white),
                          at: CGPoint(x: banner.midX, y: banner.midY))

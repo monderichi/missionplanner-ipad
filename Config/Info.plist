@@ -51,10 +51,6 @@
 	</array>
 	<key>UIRequiresFullScreen</key>
 	<true/>
-	<key>UIDeviceFamily</key>
-	<array>
-		<integer>2</integer>
-	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
