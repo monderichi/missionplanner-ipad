@@ -1,0 +1,40 @@
+name: Build Sideloadly IPA
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode version
+        run: xcodebuild -version
+
+      - name: MAVLink protocol tests (parity with Mission Planner MAVLink.dll fixtures)
+        run: swift test --package-path Packages/MAVLinkKit
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build unsigned IPA
+        run: bash scripts/package_ipa.sh
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: MissionPlanner-iPad-Sideloadly
+          path: build/MissionPlanner-iPad-Sideloadly.ipa
+          if-no-files-found: error
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: build/xcodebuild.log
+          if-no-files-found: ignore

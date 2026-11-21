@@ -1,0 +1,44 @@
+# XcodeGen spec. The .xcodeproj is generated on the CI Mac (`xcodegen generate`), so nothing
+# Xcode-specific has to be edited by hand on Windows.
+name: MissionPlannerPad
+options:
+  bundleIdPrefix: io.github.missionplannerpad
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  MAVLinkKit:
+    path: Packages/MAVLinkKit
+
+targets:
+  MissionPlannerPad:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    dependencies:
+      - package: MAVLinkKit
+    settings:
+      base:
+        PRODUCT_NAME: MissionPlannerPad
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.missionplannerpad.app
+        INFOPLIST_FILE: Config/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "2" # iPad only
+        SWIFT_VERSION: "5.0"
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ENABLE_BITCODE: NO
+        # Signing is done by Sideloadly with your Apple ID, not here.
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
+        DEVELOPMENT_TEAM: ""
+
+schemes:
+  MissionPlannerPad:
+    build:
+      targets:
+        MissionPlannerPad: all
