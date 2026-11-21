@@ -287,7 +287,9 @@ public enum ParamFile {
 
     public static func parse(_ text: String) -> [String: Float] {
         var out: [String: Float] = [:]
-        for raw in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+        // Character.isNewline: in Swift "\r\n" (Windows files, e.g. saved by desktop Mission Planner)
+        // is ONE Character, so comparing against "\n" / "\r" would never split those lines.
+        for raw in text.split(whereSeparator: { $0.isNewline }) {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.isEmpty || line.hasPrefix("#") { continue }
             let cols = line.split(whereSeparator: { $0 == "," || $0 == "\t" || $0 == " " }).map(String.init)
