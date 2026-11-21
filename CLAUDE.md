@@ -117,7 +117,10 @@ Why the existing link types fail, and the fix:
 - Bridging through desktop Mission Planner (Ctrl+F → MAVLink Mirror, TCP inbound 14550) works for a
   PC-tethered setup, but the user explicitly does **not** want it. They want the ELRS Wi-Fi.
 
-## Phases 4–7 (written 2026-11-21, see README "What works now")
+## Phases 4–7 (2026-11-21, see README "What works now")
+
+Commit `a90a9a5` (CI run 44944471283) builds green on the first try: 32/32 tests. Not yet
+tried on the iPad: the map editing, calibrations, motor test and replay need a real check.
 
 - The user confirmed the iPad connects over ExpressLRS Wi-Fi. Their backpack sends to **14551** (not
   14550). `ELRSBackpack.swift` now reads `/mavlink` on connect and uses `ports.listen`/`ports.send`.
