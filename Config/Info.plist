@@ -38,6 +38,13 @@
 		<string>_mavlink._tcp</string>
 	</array>
 
+	<!-- Plain-HTTP reads of the ExpressLRS backpack status page (http://10.0.0.1/mavlink) -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+
 	<!-- BLE telemetry radios / UART bridges -->
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Mission Planner connects to Bluetooth LE telemetry radios.</string>

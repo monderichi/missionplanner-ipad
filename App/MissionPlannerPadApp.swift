@@ -15,6 +15,9 @@ struct MissionPlannerPadApp: App {
                 .environmentObject(link.vehicle)
                 .environmentObject(link.params)
                 .environmentObject(link.commands)
+                .environmentObject(link.mission)
+                .environmentObject(link.calibration)
+                .environmentObject(link.replay)
         }
     }
 }

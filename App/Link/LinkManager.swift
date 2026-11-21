@@ -20,6 +20,11 @@ final class LinkManager: ObservableObject {
     let vehicle = VehicleModel()
     let params = ParameterStore()
     let commands = CommandCenter()
+    let mission = MissionStore()
+    let calibration = CalibrationStore()
+    let replay = ReplayController()
+    /// True while a .tlog is being replayed (nothing is sent, no sessions attached).
+    @Published private(set) var isReplaying = false
 
     /// Stream rates in Hz requested on connect, like Mission Planner's defaults
     /// (Config > Planner > Telemetry rates / SRx_* params).
@@ -58,12 +63,63 @@ final class LinkManager: ObservableObject {
             self?.redownloadAfterReboot = true
             self?.params.markRebooted()
         }
+        mission.send = { [weak self] m in self?.send(any: m) }
+        mission.homeProvider = { [weak self] in self?.vehicle.home ?? self?.vehicle.position }
+        calibration.commands = commands
+        calibration.vehicle = vehicle
+    }
+
+    /// Plays a .tlog through the normal pipeline (read-only).
+    func startReplay(url: URL) {
+        disconnect()
+        connectGeneration += 1
+        isReplaying = true
+        narrowLink = false
+        ioQueue.sync {
+            parser.reset()
+            pendingBytes = 0
+        }
+        vehicle.reset()
+        stats = MAVLinkParser.Stats()
+        bytesReceived = 0
+        tlogURL = nil
+        let t = ReplayTransport(url: url, controller: replay)
+        t.onSeekBack = { [weak self] in self?.vehicle.clearTrail() }
+        t.onStateChange = { [weak self] s in DispatchQueue.main.async { self?.state = s } }
+        t.onReceive = { [weak self] data in self?.ioQueue.async { self?.process(data) } }
+        transport = t
+        t.open()
+        startTimers(sendHeartbeat: false)
     }
 
     // MARK: connect / disconnect
 
+    /// Last settings read from an ExpressLRS backpack (nil if not read / not ELRS).
+    @Published private(set) var backpackInfo: ELRSBackpackInfo?
+    private var connectGeneration = 0
+
     func connect(kind: LinkKind, host: String, port: UInt16, localPort: UInt16 = 14550, bleDevice: UUID?) {
         disconnect()
+        connectGeneration += 1
+        let gen = connectGeneration
+        backpackInfo = nil
+        guard kind == .elrs else {
+            open(kind: kind, host: host, port: port, localPort: localPort, bleDevice: bleDevice)
+            return
+        }
+        // Ask the backpack which ports it really uses (they are configurable, e.g. send 14551).
+        state = .connecting("Reading backpack settings from \(host)…")
+        ELRSBackpack.fetch(host: host) { [weak self] info in
+            DispatchQueue.main.async {
+                guard let self, gen == self.connectGeneration else { return }
+                self.backpackInfo = info
+                self.open(kind: kind, host: host, port: info?.ports.listen ?? port,
+                          localPort: info?.ports.send ?? localPort, bleDevice: bleDevice)
+            }
+        }
+    }
+
+    private func open(kind: LinkKind, host: String, port: UInt16, localPort: UInt16, bleDevice: UUID?) {
         let t: MAVTransport
         switch kind {
         case .udpListen: t = UDPListenTransport(port: port)
@@ -106,16 +162,19 @@ final class LinkManager: ObservableObject {
         }
         transport = t
         t.open()
-        startHeartbeat()
+        startTimers(sendHeartbeat: true)
     }
 
     func disconnect() {
+        connectGeneration += 1 // cancels a pending backpack lookup
         heartbeatTimer?.cancel()
         heartbeatTimer = nil
         controlTimer?.cancel()
         controlTimer = nil
         params.detach()
         commands.detach()
+        mission.detach()
+        isReplaying = false
         attachedSystem = nil
         redownloadAfterReboot = false
         transport?.onReceive = nil
@@ -163,15 +222,15 @@ final class LinkManager: ObservableObject {
 
     // MARK: internals
 
-    private func startHeartbeat() {
+    private func startTimers(sendHeartbeat: Bool) {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now(), repeating: 1.0)
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             // GCS heartbeat (MAV_TYPE_GCS, MAV_AUTOPILOT_INVALID, MAV_STATE_ACTIVE). UDP-connect
             // bridges only start forwarding once they've heard from us.
-            self.send(MAV.Heartbeat(customMode: 0, type: MAVType.gcs.rawValue, autopilot: MAVAutopilot.invalid,
-                                    baseMode: 0, systemStatus: MAVState.active.rawValue, mavlinkVersion: 3))
+            if sendHeartbeat { self.send(MAV.Heartbeat(customMode: 0, type: MAVType.gcs.rawValue, autopilot: MAVAutopilot.invalid,
+                                    baseMode: 0, systemStatus: MAVState.active.rawValue, mavlinkVersion: 3)) }
             self.vehicle.tick()
             self.ioQueue.async {
                 let s = self.parser.stats
@@ -191,6 +250,7 @@ final class LinkManager: ObservableObject {
         control.setEventHandler { [weak self] in
             self?.params.tick()
             self?.commands.tick()
+            self?.mission.tick()
         }
         controlTimer = control
         control.resume()
@@ -199,18 +259,25 @@ final class LinkManager: ObservableObject {
     /// Main queue. A vehicle (re)appeared: attach sessions the first time we see this sysid,
     /// re-download parameters after a reboot, and (re)request streams every time.
     private func vehicleAppeared() {
-        guard let sys = vehicle.systemID else { return }
+        guard !isReplaying, let sys = vehicle.systemID else { return }
         let comp = vehicle.componentID
         if attachedSystem != sys {
             attachedSystem = sys
             params.attach(systemID: sys, componentID: comp, vehicleType: vehicle.vehicleType, narrowLink: narrowLink)
             commands.attach(systemID: sys, componentID: comp, narrowLink: narrowLink)
+            mission.attach(systemID: sys, componentID: comp, vehicleType: vehicle.vehicleType, narrowLink: narrowLink)
+            commands.requestMessage(242) // HOME_POSITION for the map and the plan's home item
         } else if redownloadAfterReboot {
             redownloadAfterReboot = false
             params.download()
         }
         requestDataStreams()
     }
+
+    static let missionMessageIDs: Set<UInt32> = [
+        MAV.MissionCount.mavInfo.id, MAV.MissionItemInt.mavInfo.id, MAV.MissionItem.mavInfo.id,
+        MAV.MissionRequestInt.mavInfo.id, MAV.MissionRequest.mavInfo.id, MAV.MissionAck.mavInfo.id,
+    ]
 
     /// Runs on ioQueue.
     private func process(_ data: Data) {
@@ -233,6 +300,10 @@ final class LinkManager: ObservableObject {
                     self.params.handle(m)
                 } else if p.messageID == MAV.CommandAck.mavInfo.id, let m = p.decode(MAV.CommandAck.self) {
                     self.commands.handle(m)
+                } else if p.messageID == MAV.CommandLong.mavInfo.id, let m = p.decode(MAV.CommandLong.self) {
+                    self.calibration.handle(m) // vehicle -> GCS requests (accel cal positions)
+                } else if Self.missionMessageIDs.contains(p.messageID) {
+                    self.mission.handle(p)
                 }
             }
             if newVehicle { self.vehicleAppeared() }

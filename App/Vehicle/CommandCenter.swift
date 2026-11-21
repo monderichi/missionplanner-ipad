@@ -49,7 +49,50 @@ final class CommandCenter: ObservableObject {
         refreshPending()
     }
 
+    /// Generic tracked command (retried until COMMAND_ACK).
+    func command(_ command: UInt16, params: [Float], label: String) {
+        guard let session else { return }
+        session.send(command, params: params, now: now).forEach { send?($0) }
+        names[command] = label
+        lastResult = "\(label)…"
+        refreshPending()
+    }
+
+    /// Sent exactly once, never retried: for commands where a repeat would restart something
+    /// (accelerometer calibration, MAV_CMD_ACCELCAL_VEHICLE_POS answers). ACKs still update lastResult.
+    func sendOnce(_ command: UInt16, params p: [Float], label: String) {
+        guard let session else { return }
+        let v = p + [Float](repeating: 0, count: max(0, 7 - p.count))
+        send?(MAV.CommandLong(param1: v[0], param2: v[1], param3: v[2], param4: v[3], param5: v[4], param6: v[5],
+                              param7: v[6], command: command, targetSystem: session.targetSystem,
+                              targetComponent: session.targetComponent, confirmation: 0))
+        names[command] = label
+        untracked.insert(command)
+        lastResult = "\(label)…"
+    }
+
+    /// MAV_CMD_REQUEST_MESSAGE (e.g. HOME_POSITION = 242).
+    func requestMessage(_ id: UInt32) {
+        guard let session else { return }
+        session.send(MAVCmd.requestMessage, params: [Float(id)], now: now).forEach { send?($0) }
+        names[MAVCmd.requestMessage] = "Request message"
+        quiet.insert(MAVCmd.requestMessage)
+        refreshPending()
+    }
+
+    private var names: [UInt16: String] = [:]
+    private var untracked: Set<UInt16> = []
+    /// Commands whose results aren't worth a banner (background requests).
+    private var quiet: Set<UInt16> = []
+
     func handle(_ ack: MAV.CommandAck) {
+        if untracked.contains(ack.command) {
+            untracked.remove(ack.command)
+            let label = names[ack.command] ?? "Command \(ack.command)"
+            lastResultOK = ack.result == MAVResult.accepted.rawValue || ack.result == MAVResult.inProgress.rawValue
+            lastResult = "\(label): \(CommandSession.resultText(ack.result))"
+            return
+        }
         guard let session else { return }
         for e in session.handle(ack, now: now) { apply(e) }
         refreshPending()
@@ -68,6 +111,7 @@ final class CommandCenter: ObservableObject {
     }
 
     private func name(_ cmd: UInt16) -> String {
+        if let n = names[cmd] { return n }
         switch cmd {
         case MAVCmd.componentArmDisarm: return "Arm/disarm"
         case MAVCmd.doSetMode: return "Mode change"
@@ -78,6 +122,11 @@ final class CommandCenter: ObservableObject {
 
     private func apply(_ e: CommandSession.Event) {
         switch e {
+        case .accepted(let cmd) where quiet.contains(cmd),
+             .rejected(let cmd, _) where quiet.contains(cmd),
+             .timedOut(let cmd) where quiet.contains(cmd):
+            quiet.remove(cmd)
+            return
         case .accepted(let cmd):
             lastResult = "\(name(cmd)): accepted"
             lastResultOK = true

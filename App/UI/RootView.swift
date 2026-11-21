@@ -19,7 +19,7 @@ struct RootView: View {
     }
 
     enum Screen: String, CaseIterable, Identifiable {
-        case data = "Flight Data", config = "Parameters"
+        case data = "Data", plan = "Plan", setup = "Setup", config = "Params"
         var id: String { rawValue }
     }
 
@@ -28,8 +28,11 @@ struct RootView: View {
             StatusBar(showConnect: $showConnect, screen: $screen)
             switch screen {
             case .data: flightData
+            case .plan: PlanView()
+            case .setup: SetupView()
             case .config: ParametersView()
             }
+            if link.isReplaying { ReplayBar() }
         }
         .sheet(isPresented: $showConnect) { ConnectView() }
         .onAppear { if !link.state.isActive { showConnect = true } }
@@ -98,7 +101,7 @@ struct StatusBar: View {
                 ForEach(RootView.Screen.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
-            .frame(width: 240)
+            .frame(width: 280)
 
             Spacer()
 
@@ -133,5 +136,43 @@ struct StatusBar: View {
             Text(title).font(.caption2).foregroundColor(.secondary)
             Text(value).font(.subheadline.weight(.semibold)).foregroundColor(color).lineLimit(1)
         }
+    }
+}
+
+/// Playback controls shown while a .tlog is replayed.
+struct ReplayBar: View {
+    @EnvironmentObject var replay: ReplayController
+    @EnvironmentObject var link: LinkManager
+    @State private var scrub: Double?
+
+    private func time(_ t: TimeInterval) -> String {
+        let s = Int(t)
+        return String(format: "%d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60)
+    }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Button { replay.playPause() } label: {
+                Image(systemName: replay.playing ? "pause.fill" : "play.fill").font(.title2)
+            }
+            .disabled(!replay.loaded)
+            Text(time(scrub.map { $0 * replay.duration } ?? replay.elapsed)).monospacedDigit().font(.callout)
+            Slider(value: Binding(get: { scrub ?? replay.position }, set: { scrub = $0 }), in: 0...1, onEditingChanged: { editing in
+                if !editing, let s = scrub {
+                    replay.seek(to: s)
+                    scrub = nil
+                }
+            })
+            Text(time(replay.duration)).monospacedDigit().font(.callout)
+            Picker("Speed", selection: $replay.speed) {
+                ForEach([0.5, 1, 2, 5, 10, 25], id: \.self) { s in Text("\(s < 1 ? String(s) : String(Int(s)))×").tag(s) }
+            }
+            .pickerStyle(.menu)
+            Text(replay.fileName).font(.caption).lineLimit(1).frame(maxWidth: 200)
+            Button("Stop") { link.disconnect() }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
     }
 }

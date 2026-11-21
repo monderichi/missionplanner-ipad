@@ -73,6 +73,31 @@ final class VehicleModel: ObservableObject {
     @Published private(set) var messages: [StatusMessage] = []
     @Published private(set) var messageCounts: [String: Int] = [:]
 
+    // HOME_POSITION
+    @Published private(set) var homeLatitude: Double?
+    @Published private(set) var homeLongitude: Double?
+    @Published private(set) var homeAltitudeMSL = 0.0
+
+    /// Flight path (appended when the vehicle moved more than ~1 m), newest last.
+    @Published private(set) var trail: [GeoPoint] = []
+    static let maxTrail = 3000
+
+    // RC_CHANNELS / SERVO_OUTPUT_RAW (PWM, index 0 = channel 1)
+    @Published private(set) var rcChannels: [UInt16] = Array(repeating: 0, count: 18)
+    @Published private(set) var rcChannelCount = 0
+    @Published private(set) var servoOutputs: [UInt16] = Array(repeating: 0, count: 16)
+
+    // SYS_STATUS sensor bitmasks (MAV_SYS_STATUS_SENSOR)
+    @Published private(set) var sensorsPresent: UInt32 = 0
+    @Published private(set) var sensorsEnabled: UInt32 = 0
+    @Published private(set) var sensorsHealthy: UInt32 = 0
+
+    // MAG_CAL_PROGRESS / MAG_CAL_REPORT, keyed by compass id
+    @Published private(set) var magCalProgress: [UInt8: UInt8] = [:]
+    @Published private(set) var magCalReports: [UInt8: MAV.MagCalReport] = [:]
+
+    @Published private(set) var lastReachedWaypoint: Int?
+
     private var statusChunks: [UInt16: String] = [:]
     static let heartbeatTimeout: TimeInterval = 5
     static let maxMessages = 300
@@ -116,6 +141,36 @@ final class VehicleModel: ObservableObject {
         longitude = nil
         messageCounts = [:]
         statusChunks = [:]
+        homeLatitude = nil
+        homeLongitude = nil
+        trail = []
+        rcChannelCount = 0
+        magCalProgress = [:]
+        magCalReports = [:]
+        lastReachedWaypoint = nil
+    }
+
+    func clearTrail() { trail = [] }
+
+    func resetMagCal() {
+        magCalProgress = [:]
+        magCalReports = [:]
+    }
+
+    var home: GeoPoint? {
+        guard let la = homeLatitude, let lo = homeLongitude else { return nil }
+        return GeoPoint(latitude: la, longitude: lo)
+    }
+
+    var position: GeoPoint? {
+        guard let la = latitude, let lo = longitude else { return nil }
+        return GeoPoint(latitude: la, longitude: lo)
+    }
+
+    /// Feed packets from a .tlog replay (same handling as live, no sysid lock-in surprises).
+    func replay(_ packet: MAVLinkPacket) {
+        _ = handle(packet)
+        if packet.messageID == MAV.RadioStatus.mavInfo.id { handleRadio(packet) }
     }
 
     /// Called ~1 Hz by the link manager.
@@ -177,8 +232,17 @@ final class VehicleModel: ObservableObject {
         case MAV.GlobalPositionInt.mavInfo.id:
             guard let m = packet.decode(MAV.GlobalPositionInt.self) else { break }
             if m.lat != 0 || m.lon != 0 {
-                latitude = Double(m.lat) / 1e7
-                longitude = Double(m.lon) / 1e7
+                let p = GeoPoint(latitude: Double(m.lat) / 1e7, longitude: Double(m.lon) / 1e7)
+                latitude = p.latitude
+                longitude = p.longitude
+                if let last = trail.last {
+                    if Geo.distance(last, p) > 1 {
+                        trail.append(p)
+                        if trail.count > Self.maxTrail { trail.removeFirst(trail.count - Self.maxTrail) }
+                    }
+                } else {
+                    trail.append(p)
+                }
             }
             relativeAltitude = Double(m.relativeAlt) / 1000
 
@@ -193,6 +257,9 @@ final class VehicleModel: ObservableObject {
             batteryVoltage = m.voltageBattery == UInt16.max ? 0 : Double(m.voltageBattery) / 1000
             batteryCurrent = m.currentBattery < 0 ? 0 : Double(m.currentBattery) / 100
             batteryRemaining = Int(m.batteryRemaining)
+            sensorsPresent = m.onboardControlSensorsPresent
+            sensorsEnabled = m.onboardControlSensorsEnabled
+            sensorsHealthy = m.onboardControlSensorsHealth
 
         case MAV.NavControllerOutput.mavInfo.id:
             guard let m = packet.decode(MAV.NavControllerOutput.self) else { break }
@@ -207,6 +274,38 @@ final class VehicleModel: ObservableObject {
             ekfFlags = m.flags
             ekfVariances = [m.velocityVariance, m.posHorizVariance, m.posVertVariance,
                             m.compassVariance, m.terrainAltVariance].map { Double($0) }
+
+        case MAV.HomePosition.mavInfo.id:
+            guard let m = packet.decode(MAV.HomePosition.self) else { break }
+            homeLatitude = Double(m.latitude) / 1e7
+            homeLongitude = Double(m.longitude) / 1e7
+            homeAltitudeMSL = Double(m.altitude) / 1000
+
+        case MAV.RcChannels.mavInfo.id:
+            guard let m = packet.decode(MAV.RcChannels.self) else { break }
+            rcChannels = [m.chan1Raw, m.chan2Raw, m.chan3Raw, m.chan4Raw, m.chan5Raw, m.chan6Raw, m.chan7Raw, m.chan8Raw,
+                          m.chan9Raw, m.chan10Raw, m.chan11Raw, m.chan12Raw, m.chan13Raw, m.chan14Raw, m.chan15Raw,
+                          m.chan16Raw, m.chan17Raw, m.chan18Raw]
+            rcChannelCount = Int(m.chancount)
+
+        case MAV.ServoOutputRaw.mavInfo.id:
+            guard let m = packet.decode(MAV.ServoOutputRaw.self), m.port == 0 else { break }
+            servoOutputs = [m.servo1Raw, m.servo2Raw, m.servo3Raw, m.servo4Raw, m.servo5Raw, m.servo6Raw, m.servo7Raw,
+                            m.servo8Raw, m.servo9Raw, m.servo10Raw, m.servo11Raw, m.servo12Raw, m.servo13Raw,
+                            m.servo14Raw, m.servo15Raw, m.servo16Raw]
+
+        case MAV.MissionItemReached.mavInfo.id:
+            guard let m = packet.decode(MAV.MissionItemReached.self) else { break }
+            lastReachedWaypoint = Int(m.seq)
+
+        case MAV.MagCalProgress.mavInfo.id:
+            guard let m = packet.decode(MAV.MagCalProgress.self) else { break }
+            magCalProgress[m.compassId] = m.completionPct
+
+        case MAV.MagCalReport.mavInfo.id:
+            guard let m = packet.decode(MAV.MagCalReport.self) else { break }
+            magCalReports[m.compassId] = m
+            magCalProgress[m.compassId] = 100
 
         case MAV.Vibration.mavInfo.id:
             guard let m = packet.decode(MAV.Vibration.self) else { break }

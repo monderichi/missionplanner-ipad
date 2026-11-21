@@ -179,6 +179,9 @@ struct ParamFilePicker: View {
     let files: [URL]
     let onPick: (URL) -> Void
     let onBrowse: () -> Void
+    var title = "Load parameters"
+    var folderName = "params"
+    var fileKind = ".param"
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -189,14 +192,14 @@ struct ParamFilePicker: View {
                 }
                 Section("Saved on this iPad") {
                     if files.isEmpty {
-                        Text("No .param files in Mission Planner › params yet.").foregroundColor(.secondary)
+                        Text("No \(fileKind) files in Mission Planner › \(folderName) yet.").foregroundColor(.secondary)
                     }
                     ForEach(files, id: \.self) { url in
                         Button(url.lastPathComponent) { onPick(url) }
                     }
                 }
             }
-            .navigationTitle("Load parameters")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }

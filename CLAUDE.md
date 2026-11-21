@@ -117,6 +117,23 @@ Why the existing link types fail, and the fix:
 - Bridging through desktop Mission Planner (Ctrl+F → MAVLink Mirror, TCP inbound 14550) works for a
   PC-tethered setup, but the user explicitly does **not** want it. They want the ELRS Wi-Fi.
 
+## Phases 4–7 (written 2026-11-21, see README "What works now")
+
+- The user confirmed the iPad connects over ExpressLRS Wi-Fi. Their backpack sends to **14551** (not
+  14550). `ELRSBackpack.swift` now reads `/mavlink` on connect and uses `ports.listen`/`ports.send`.
+  ATS allows it via `NSAllowsLocalNetworking`; if the read fails, the typed ports are used.
+- MAVLinkKit `MissionProtocol.swift`: `MissionSession` (download/upload for mission/fence/rally,
+  retries, MISSION_REQUEST legacy), `WaypointFile` (QGC WPL 110), `Geo`, `SurveyGrid`. Tests are in
+  `MissionTests.swift`; the simulated vehicle re-ACKs a duplicate final item, as ArduPilot does.
+- App: `MissionStore` (home = item 0, fence groups get param1 = vertex count), `Map/MapCanvas.swift`
+  (MKMapView: markers, drag, overlays), `Map/TileCache.swift` (Esri/OSM cache + Esri area download,
+  capped at 6000 tiles; OSM area download is disabled per their tile policy), `PlanView`,
+  `CalibrationStore` + `SetupView`, `ReplayTransport` + `ReplayBar`.
+- `App/Resources/MissionCommands.json` comes from `tools/gen_mission_cmds.ps1` (mavcmd.xml + MAV_CMD enum).
+- Calibration commands use `CommandCenter.sendOnce`, because resending PREFLIGHT_CALIBRATION would
+  restart it. The vehicle drives the accel cal with COMMAND_LONG 42429, which `LinkManager` routes
+  to `CalibrationStore`.
+
 ## Backlog after the ELRS link works
 
 Phases 4–7 from `CLAUDE_PROMPTS.md`: map upgrades (trail, offline tiles), the mission editor

@@ -1,11 +1,13 @@
 // Connection sheet: the iPad equivalent of Mission Planner's top-right COM port / baud / Connect box.
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ConnectView: View {
     @EnvironmentObject var link: LinkManager
     @Environment(\.dismiss) private var dismiss
     @StateObject private var scanner = BLEScanner()
+    @State private var showLogImporter = false
 
     @AppStorage("link.kind") private var kindRaw = LinkKind.udpListen.rawValue
     @AppStorage("link.host") private var host = "192.168.4.1"
@@ -68,7 +70,11 @@ struct ConnectView: View {
                     } header: {
                         Text("ExpressLRS backpack")
                     } footer: {
-                        Text("Backpack port = its MAVLink listen port, iPad port = its send port. Check them at http://10.0.0.1/mavlink in Safari if the link stays silent.")
+                        if let info = link.backpackInfo {
+                            Text("Read from the backpack: \(info.summary). These ports are used automatically.")
+                        } else {
+                            Text("On Connect the app reads the real ports from http://\(host)/mavlink and uses them. The fields above are only used if that page can't be read.")
+                        }
                     }
                 case .ble:
                     Section {
@@ -116,6 +122,32 @@ struct ConnectView: View {
                         dismiss()
                     }
                     .disabled(kind == .ble && UUID(uuidString: bleIDText) == nil)
+                }
+
+                Section {
+                    let logs = DocumentsStore.shared.tlogFiles()
+                    if logs.isEmpty {
+                        Text("No recorded logs yet.").foregroundColor(.secondary)
+                    }
+                    ForEach(logs.prefix(8), id: \.self) { url in
+                        Button {
+                            link.startReplay(url: url)
+                            dismiss()
+                        } label: {
+                            Label(url.lastPathComponent, systemImage: "play.rectangle")
+                        }
+                    }
+                    Button { showLogImporter = true } label: { Label("Open a .tlog from Files…", systemImage: "folder") }
+                } header: {
+                    Text("Replay a telemetry log")
+                } footer: {
+                    Text("Plays a .tlog (from this iPad or desktop Mission Planner) through the HUD and map. Nothing is sent to any vehicle.")
+                }
+            }
+            .fileImporter(isPresented: $showLogImporter, allowedContentTypes: [.item]) { result in
+                if case .success(let url) = result {
+                    link.startReplay(url: url)
+                    dismiss()
                 }
             }
             .navigationTitle("Connect")

@@ -36,7 +36,29 @@ run on an iPad, so this is a new app. Its MAVLink layer comes straight from Miss
   emergency force disarm), and reboot the autopilot. Every command is retried until a COMMAND_ACK
   arrives. Arming refusals are explained in *Messages* ("PreArm: …").
 
-Not done yet: mission planning, calibration wizards and tlog replay (phases 4–7, see `CLAUDE_PROMPTS.md`).
+- **Map (Data and Plan screens):** vehicle arrow, home, red flight trail, the mission path, geofence
+  and rally points. Sources are Apple satellite/map, Esri satellite and OpenStreetMap. Every Esri/OSM
+  tile you view is cached in *Files › Mission Planner › tiles*. **Map › Download visible area**
+  (Esri) pre-caches a region so the map works at the field, where the ExpressLRS hotspot has no
+  internet. Do the download at home.
+- **Plan screen (Phase 5):** tap the map to add waypoints, drag to move, tap a marker to edit it.
+  The editor has Mission Planner's command list and parameter labels per vehicle (from
+  `mavcmd.xml`), an altitude frame (relative/absolute/terrain), and +Takeoff/RTL/Land shortcuts.
+  **Read/Write** use the MAVLink mission protocol with retries. **Fence** (inclusion polygon) and
+  **Rally** points work the same way. **Survey** lets you outline an area and generate a lawn-mower
+  grid (spacing, angle, overshoot, altitude, camera trigger distance). You can load and save
+  Mission Planner `.waypoints` files.
+- **Setup screen (Phase 6):** pre-arm messages and sensor health, frame type, accelerometer
+  6-position and level calibration (prompts come from the flight controller), onboard compass
+  calibration with progress per compass, radio calibration (writes RCn_MIN/MAX/TRIM), flight
+  mode switch positions, and motor test (props-off confirmation).
+- **TLog replay (Phase 7):** Connect › *Replay a telemetry log* plays any `.tlog` through the HUD and
+  map, with play/pause, seek and 0.5–25× speed.
+- **ExpressLRS:** on Connect the app reads `http://10.0.0.1/mavlink` and uses the backpack's real
+  ports automatically (e.g. send port 14551).
+
+Not done yet (see `CLAUDE.md`): multiple vehicles at once, terrain-following previews, DataFlash
+(.bin) log download and analysis, and firmware flashing (that needs USB).
 
 ### How to change a setting on the drone
 
