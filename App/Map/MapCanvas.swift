@@ -46,6 +46,8 @@ struct MapCanvas: UIViewRepresentable {
     var onTap: ((GeoPoint) -> Void)?
     var onMove: ((MapEditTarget, Int, GeoPoint) -> Void)?
     var onSelect: ((MapEditTarget, Int) -> Void)?
+    /// Long-press anywhere (Flight Data: "Fly here").
+    var onLongPress: ((GeoPoint) -> Void)?
     /// Lets parents read the visible area (e.g. for tile download).
     var regionChanged: ((MKMapRect, Int) -> Void)?
 
@@ -61,6 +63,9 @@ struct MapCanvas: UIViewRepresentable {
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tapped(_:)))
         tap.delegate = context.coordinator
         map.addGestureRecognizer(tap)
+        let long = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.longPressed(_:)))
+        long.minimumPressDuration = 0.6
+        map.addGestureRecognizer(long)
         context.coordinator.map = map
         return map
     }
@@ -226,6 +231,12 @@ struct MapCanvas: UIViewRepresentable {
             guard let map, parent.editTarget != .none, let onTap = parent.onTap else { return }
             let c = map.convert(g.location(in: map), toCoordinateFrom: map)
             onTap(GeoPoint(latitude: c.latitude, longitude: c.longitude))
+        }
+
+        @objc func longPressed(_ g: UILongPressGestureRecognizer) {
+            guard g.state == .began, let map, let cb = parent.onLongPress else { return }
+            let c = map.convert(g.location(in: map), toCoordinateFrom: map)
+            cb(GeoPoint(latitude: c.latitude, longitude: c.longitude))
         }
 
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {

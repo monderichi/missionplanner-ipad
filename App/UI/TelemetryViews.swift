@@ -75,6 +75,7 @@ struct StatusListView: View {
                 row("Vibe X/Y/Z", vehicle.vibration.map { String(format: "%.1f", $0) }.joined(separator: " / "))
                 row("Clipping 0/1/2", vehicle.clipping.map { "\($0)" }.joined(separator: " / "))
             }
+            ESCStatusSection()
             Section("Link") {
                 row("Packets", "\(link.stats.packetsReceived)")
                 row("Lost (seq gaps)", "\(link.stats.packetsLost)")

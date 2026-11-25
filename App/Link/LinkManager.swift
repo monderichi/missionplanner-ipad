@@ -23,6 +23,8 @@ final class LinkManager: ObservableObject {
     let mission = MissionStore()
     let calibration = CalibrationStore()
     let replay = ReplayController()
+    let speech = SpeechAlerts()
+    let logs = LogStore()
     /// True while a .tlog is being replayed (nothing is sent, no sessions attached).
     @Published private(set) var isReplaying = false
 
@@ -69,6 +71,8 @@ final class LinkManager: ObservableObject {
         mission.homeProvider = { [weak self] in self?.vehicle.home ?? self?.vehicle.position }
         calibration.commands = commands
         calibration.vehicle = vehicle
+        speech.observe(vehicle)
+        logs.send = { [weak self] m in self?.send(any: m) }
     }
 
     /// Plays a .tlog through the normal pipeline (read-only).
@@ -176,6 +180,7 @@ final class LinkManager: ObservableObject {
         params.detach()
         commands.detach()
         mission.detach()
+        logs.detach()
         isReplaying = false
         attachedSystem = nil
         attachedComponent = nil
@@ -269,6 +274,7 @@ final class LinkManager: ObservableObject {
             self?.params.tick()
             self?.commands.tick()
             self?.mission.tick()
+            self?.logs.tick()
         }
         controlTimer = control
         control.resume()
@@ -285,6 +291,7 @@ final class LinkManager: ObservableObject {
             params.attach(systemID: sys, componentID: comp, vehicleType: vehicle.vehicleType, narrowLink: narrowLink)
             commands.attach(systemID: sys, componentID: comp, narrowLink: narrowLink)
             mission.attach(systemID: sys, componentID: comp, vehicleType: vehicle.vehicleType, narrowLink: narrowLink)
+            logs.attach(systemID: sys, componentID: comp)
             commands.requestMessage(242) // HOME_POSITION for the map and the plan's home item
         } else if redownloadAfterReboot {
             redownloadAfterReboot = false
@@ -323,6 +330,8 @@ final class LinkManager: ObservableObject {
                     self.calibration.handle(m) // vehicle -> GCS requests (accel cal positions)
                 } else if Self.missionMessageIDs.contains(p.messageID) {
                     self.mission.handle(p)
+                } else if p.messageID == MAV.LogEntry.mavInfo.id || p.messageID == MAV.LogData.mavInfo.id {
+                    self.logs.handle(p)
                 }
             }
             if newVehicle { self.vehicleAppeared() }

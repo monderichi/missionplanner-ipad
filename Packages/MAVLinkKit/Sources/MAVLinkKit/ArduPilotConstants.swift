@@ -107,6 +107,26 @@ public enum ArduPilotModes {
         }
     }
 
+    /// GUIDED custom mode for the firmware (Copter 4, Plane/Rover 15, Sub 4).
+    public static func guided(for vehicleType: UInt8) -> UInt32? {
+        switch MAVType(rawValue: vehicleType)?.firmware {
+        case .copter, .sub: return 4
+        case .plane, .rover: return 15
+        default: return nil
+        }
+    }
+
+    /// One-tap modes shown in the Actions tab, per firmware (Mission Planner Actions tab buttons).
+    public static func quickModes(for vehicleType: UInt8) -> [UInt32] {
+        switch MAVType(rawValue: vehicleType)?.firmware {
+        case .copter: return [5, 2, 6, 9, 3, 4, 17, 0]      // Loiter AltHold RTL Land Auto Guided Brake Stabilize
+        case .plane: return [11, 12, 10, 5, 15, 0]         // RTL Loiter Auto FBWA Guided Manual
+        case .rover: return [4, 11, 10, 15, 0]             // Hold RTL Auto Guided Manual
+        case .sub: return [2, 0, 19, 16]
+        default: return []
+        }
+    }
+
     public static func name(customMode: UInt32, vehicleType: UInt8) -> String {
         table(for: MAVType(rawValue: vehicleType))[customMode] ?? "Mode \(customMode)"
     }

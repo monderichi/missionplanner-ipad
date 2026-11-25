@@ -98,6 +98,20 @@ final class VehicleModel: ObservableObject {
 
     @Published private(set) var lastReachedWaypoint: Int?
 
+    // ESC_TELEMETRY_1_TO_4 / 5_TO_8 (DShot / BLHeli telemetry), index 0 = motor 1
+    struct ESCInfo: Equatable {
+        var rpm: Int = 0
+        var temperature: Int = 0     // °C
+        var voltage: Double = 0      // V
+        var current: Double = 0      // A
+    }
+    @Published private(set) var escs: [ESCInfo] = Array(repeating: ESCInfo(), count: 8)
+    @Published private(set) var escCount = 0
+
+    // BATTERY_STATUS (first battery)
+    @Published private(set) var batteryConsumedMah: Int?
+    @Published private(set) var cellVoltages: [Double] = []
+
     private var statusChunks: [UInt16: String] = [:]
     static let heartbeatTimeout: TimeInterval = 5
     static let attitudeTimeout: TimeInterval = 3
@@ -157,6 +171,16 @@ final class VehicleModel: ObservableObject {
     }
 
     func clearTrail() { trail = [] }
+
+    private func updateESCs(base: Int, rpm: [UInt16], temp: [UInt8], volt: [UInt16], curr: [UInt16]) {
+        var list = escs
+        for i in 0..<4 {
+            list[base + i] = ESCInfo(rpm: Int(rpm[i]), temperature: Int(temp[i]),
+                                     voltage: Double(volt[i]) / 100, current: Double(curr[i]) / 100)
+        }
+        escs = list
+        escCount = max(escCount, base + 4)
+    }
 
     func resetMagCal() {
         magCalProgress = [:]
@@ -313,6 +337,21 @@ final class VehicleModel: ObservableObject {
             servoOutputs = [m.servo1Raw, m.servo2Raw, m.servo3Raw, m.servo4Raw, m.servo5Raw, m.servo6Raw, m.servo7Raw,
                             m.servo8Raw, m.servo9Raw, m.servo10Raw, m.servo11Raw, m.servo12Raw, m.servo13Raw,
                             m.servo14Raw, m.servo15Raw, m.servo16Raw]
+
+        case MAV.EscTelemetry1To4.mavInfo.id:
+            guard let m = packet.decode(MAV.EscTelemetry1To4.self) else { break }
+            updateESCs(base: 0, rpm: m.rpm, temp: m.temperature, volt: m.voltage, curr: m.current)
+
+        case MAV.EscTelemetry5To8.mavInfo.id:
+            guard let m = packet.decode(MAV.EscTelemetry5To8.self) else { break }
+            updateESCs(base: 4, rpm: m.rpm, temp: m.temperature, volt: m.voltage, curr: m.current)
+
+        case MAV.BatteryStatus.mavInfo.id:
+            guard let m = packet.decode(MAV.BatteryStatus.self), m.id == 0 else { break }
+            batteryConsumedMah = m.currentConsumed >= 0 ? Int(m.currentConsumed) : nil
+            cellVoltages = (m.voltages + m.voltagesExt)
+                .filter { $0 != UInt16.max && $0 != 0 && $0 != UInt16.max - 1 }
+                .map { Double($0) / 1000 }
 
         case MAV.MissionItemReached.mavInfo.id:
             guard let m = packet.decode(MAV.MissionItemReached.self) else { break }

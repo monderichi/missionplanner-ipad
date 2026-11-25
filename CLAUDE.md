@@ -98,7 +98,15 @@ Why the existing link types fail, and the fix:
 
 ### Vehicle bench state (the user's copter)
 
-- ArduPilot **4.6.3**, Copter (FRAME_CLASS 1), sysid 1. On the PC it appears as USB **COM12** ("ArduPilot").
+- **ArduCopter V4.7.3** (d9c5097c) on a **MicoAir743v2**, Frame QUAD/X, sysid 1; `RCOut: DS600:1-4 PWM:5-11`
+  (DShot600 ESCs on outputs 1–4, so the ESCs report ESC_TELEMETRY/RPM). This was confirmed 2026-11-25 from Mission
+  Planner's tlogs in `Documents\Mission Planner\logs\QUADROTOR\1\`. The earlier "4.6.3" note was wrong. On the PC
+  it appears as USB **COM12** ("ArduPilot").
+- On Mission Planner's link only (1,1) and the GCS (255,190) send heartbeats; ATTITUDE arrives at about 3.9 Hz.
+  The frozen-HUD cause over ELRS is NOT proven. Ask the user for an iPad `.tlog` (Files › Mission Planner › logs)
+  and analyse it (heartbeat sources, ATTITUDE rate). The scratch script `analyze_tlog.py` does exactly that and
+  is quick to rewrite.
+- "PreArm: RC not found" appeared in Mission Planner's 13-16 log (RC not received at that time).
 - ELRS receiver on **SERIAL6**: `SERIAL6_PROTOCOL=2`, `SERIAL6_BAUD=460`, `RSSI_TYPE=5`, `RC_PROTOCOLS=1`.
 - 2026-11-21: set `SR6_EXT_STAT/EXTRA1/EXTRA2/EXTRA3/POSITION/RAW_SENS/RC_CHAN = 1` (they were 0)
   and left `SR6_ADSB/PARAMS/RAW_CTRL = 0`. The controller confirmed every set before a reboot. The
@@ -136,6 +144,20 @@ tried on the iPad: the map editing, calibrations, motor test and replay need a r
 - Calibration commands use `CommandCenter.sendOnce`, because resending PREFLIGHT_CALIBRATION would
   restart it. The vehicle drives the accel cal with COMMAND_LONG 42429, which `LinkManager` routes
   to `CalibrationStore`.
+
+## Mission Planner feature parity batch (2026-11-25)
+
+- HUD: vehicle lock only on real autopilot heartbeats, preferring compid 1; sessions re-attach on a compid
+  change; attitude watchdog (REQUEST_DATA_STREAM + SET_MESSAGE_INTERVAL); NO ATTITUDE DATA banner.
+- Setup pages: Geofence & max altitude (quick FENCE_ALT_MAX preset), Battery monitor (+ voltage/current
+  calibration), Failsafe, Tuning (generic `ParamListPage` + `ParamAutoRow`), DataFlash logs.
+- Flight Data: scrollable tabs Quick/Actions/Checklist/Status/Servo/Messages; Actions has quick modes,
+  guided takeoff, change speed/alt, restart mission and set home; long-press the map to fly there (MISSION_ITEM_INT
+  current=2); Servo/relay overrides (motor outputs are blocked); preflight checklist (MP
+  checklistDefault.xml); ESC telemetry + battery cells in Status; speech alerts (toggle in the top bar).
+- MAVLinkKit `LogProtocol.swift`: `LogListSession` and `LogDownloadSession` (gap re-requests, EOF via a short
+  chunk, LOG_REQUEST_END) with `LogTests`.
+- Not feasible on a sideloaded iPad: firmware flashing, ESC calibration (power cycle), joystick, MP scripts.
 
 ## Backlog after the ELRS link works
 

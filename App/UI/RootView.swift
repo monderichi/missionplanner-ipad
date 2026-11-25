@@ -14,7 +14,7 @@ struct RootView: View {
     @State private var screen = Screen.data
 
     enum Tab: String, CaseIterable, Identifiable {
-        case quick = "Quick", actions = "Actions", status = "Status", messages = "Messages"
+        case quick = "Quick", actions = "Actions", checklist = "Checklist", status = "Status", servo = "Servo", messages = "Messages"
         var id: String { rawValue }
     }
 
@@ -49,14 +49,22 @@ struct RootView: View {
                                 linkAlive: vehicle.heartbeatAlive || !link.state.isActive,
                                 attitudeStale: vehicle.attitudeStale)
                             .frame(height: min(geo.size.height * 0.48, 340))
-                        Picker("Tab", selection: $tab) {
-                            ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(Tab.allCases) { t in
+                                    Button(t.rawValue) { tab = t }
+                                        .buttonStyle(.bordered)
+                                        .tint(tab == t ? .accentColor : .gray)
+                                        .fontWeight(tab == t ? .bold : .regular)
+                                }
+                            }
                         }
-                        .pickerStyle(.segmented)
                         Group {
                             switch tab {
                             case .quick: ScrollView { QuickView() }
                             case .actions: ScrollView { ActionsView() }
+                            case .checklist: ChecklistView()
+                            case .servo: ScrollView { ServoView() }
                             case .status: StatusListView()
                             case .messages: MessagesView()
                             }
@@ -74,6 +82,7 @@ struct RootView: View {
 
 struct StatusBar: View {
     @EnvironmentObject var link: LinkManager
+    @EnvironmentObject var speech: SpeechAlerts
     @EnvironmentObject var vehicle: VehicleModel
     @Binding var showConnect: Bool
     @Binding var screen: RootView.Screen
@@ -114,6 +123,10 @@ struct StatusBar: View {
                     ? String(format: "%.1fV %ld%%", vehicle.batteryVoltage, vehicle.batteryRemaining)
                     : String(format: "%.1fV", vehicle.batteryVoltage))
             item("Link", linkQuality)
+            Button { speech.enabled.toggle() } label: {
+                Image(systemName: speech.enabled ? "speaker.wave.2.fill" : "speaker.slash")
+            }
+            .accessibilityLabel(speech.enabled ? "Voice alerts on" : "Voice alerts off")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)

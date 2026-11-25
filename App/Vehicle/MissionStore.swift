@@ -124,6 +124,17 @@ final class MissionStore: ObservableObject {
         banner = "Writing \(items.count) \(type.label.lowercased()) items…"
     }
 
+    /// Guided "fly here" (MissionPlanner setGuidedModeWP: MISSION_ITEM_INT with current = 2).
+    /// The vehicle must be in GUIDED; altitude is relative to home.
+    func guidedGoTo(_ p: GeoPoint, altitude: Float) {
+        guard let session else { return }
+        var it = MissionItem(frame: MAVFrame.globalRelativeAlt, command: MissionCmd.waypoint,
+                             latitude: p.latitude, longitude: p.longitude, altitude: altitude)
+        it.current = 2
+        send?(it.message(targetSystem: session.targetSystem, targetComponent: session.targetComponent))
+        banner = String(format: "Flying to %.6f, %.6f at %.0f m", p.latitude, p.longitude, altitude)
+    }
+
     func setCurrent(_ seq: Int) {
         session?.setCurrent(UInt16(seq)).forEach { send?($0) }
         banner = "Jumping to waypoint \(seq)"

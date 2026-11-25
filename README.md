@@ -57,8 +57,19 @@ run on an iPad, so this is a new app. Its MAVLink layer comes straight from Miss
 - **ExpressLRS:** on Connect the app reads `http://10.0.0.1/mavlink` and uses the backpack's real
   ports automatically (e.g. send port 14551).
 
-Not done yet (see `CLAUDE.md`): multiple vehicles at once, terrain-following previews, DataFlash
-(.bin) log download and analysis, and firmware flashing (that needs USB).
+- **More Mission Planner features:**
+  - Flight Data tabs: Quick, Actions, Checklist, Status, Servo, Messages.
+  - Actions: one-tap modes, guided takeoff, change speed/altitude, restart mission, set home.
+  - Long-press the map to **fly here** (Guided).
+  - Servo/relay overrides (motor outputs are blocked).
+  - Preflight checklist.
+  - ESC telemetry and battery cells in Status.
+  - Voice alerts (speaker icon in the top bar).
+  - Setup: Geofence & max altitude, Battery monitor (with voltage/current calibration), Failsafe,
+    Tuning, and **DataFlash logs** (list, download `.bin` over MAVLink, erase).
+
+Not done yet (see `CLAUDE.md`): multiple vehicles at once, terrain-following previews, log analysis
+and graphs, and firmware flashing (that needs USB).
 
 ### How to change a setting on the drone
 

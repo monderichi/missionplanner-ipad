@@ -7,8 +7,11 @@ import SwiftUI
 struct FlightMapView: View {
     @EnvironmentObject var vehicle: VehicleModel
     @EnvironmentObject var mission: MissionStore
+    @EnvironmentObject var commands: CommandCenter
     @AppStorage("map.source") private var sourceRaw = TileSource.appleHybrid.rawValue
     @State private var follow = true
+    @State private var flyTarget: GeoPoint?
+    @State private var flyAlt: Double = 20
     @State private var visible: (MKMapRect, Int)?
 
     private var source: TileSource { TileSource(rawValue: sourceRaw) ?? .appleHybrid }
@@ -16,6 +19,11 @@ struct FlightMapView: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             MapCanvas(vehicle: vehicle, mission: mission, tileSource: source, follow: follow,
+                      onLongPress: { p in
+                          guard mission.isAttached else { return }
+                          flyAlt = max(10, (vehicle.relativeAltitude / 5).rounded() * 5)
+                          flyTarget = p
+                      },
                       regionChanged: { rect, zoom in visible = (rect, zoom) })
                 .ignoresSafeArea(edges: .bottom)
             VStack(alignment: .trailing, spacing: 8) {
@@ -36,10 +44,39 @@ struct FlightMapView: View {
                 }
             }
             .padding(10)
+            if let b = mission.banner {
+                Text(b).font(.caption).padding(6)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 10)
+                    .onTapGesture { mission.banner = nil }
+            }
             if let a = source.attribution {
                 Text(a).font(.caption2).padding(4).background(.ultraThinMaterial)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             }
+        }
+        .alert("Fly here?", isPresented: Binding(get: { flyTarget != nil }, set: { if !$0 { flyTarget = nil } })) {
+            TextField("Altitude (m above home)", value: $flyAlt, format: .number)
+                .keyboardType(.decimalPad)
+            Button("Fly here") { flyHere() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(vehicle.armed
+                 ? "The vehicle switches to GUIDED and flies to the pressed point at this altitude (above home)."
+                 : "The vehicle is not armed. In Copter, arm and take off in GUIDED first (Actions tab).")
+        }
+    }
+
+    private func flyHere() {
+        guard let p = flyTarget else { return }
+        flyTarget = nil
+        if let g = ArduPilotModes.guided(for: vehicle.vehicleType), vehicle.customMode != g {
+            commands.setMode(g, name: "Guided")
+        }
+        // give the mode change a moment on slow links, then send the guided target
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            mission.guidedGoTo(p, altitude: Float(flyAlt))
         }
     }
 }

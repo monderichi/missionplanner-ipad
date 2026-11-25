@@ -10,6 +10,10 @@ enum SetupPage: String, CaseIterable, Identifiable {
     case prearm = "Pre-arm & sensors"
     case frame = "Frame type"
     case fence = "Geofence & max altitude"
+    case battery = "Battery monitor"
+    case failsafe = "Failsafe"
+    case tuning = "Tuning"
+    case logs = "DataFlash logs"
     case accel = "Accelerometer"
     case compass = "Compass"
     case radio = "Radio calibration"
@@ -18,11 +22,38 @@ enum SetupPage: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// REA Parity Source: MissionPlanner ConfigFailSafe.cs / ConfigBatteryMonitoring.cs.
+    static let failsafeParams = [
+        "FS_THR_ENABLE", "FS_THR_VALUE", "BATT_FS_LOW_ACT", "BATT_LOW_VOLT", "BATT_LOW_MAH",
+        "BATT_FS_CRT_ACT", "BATT_CRT_VOLT", "BATT_CRT_MAH", "FS_GCS_ENABLE", "FS_GCS_TIMEOUT",
+        "FS_EKF_ACTION", "FS_EKF_THRESH", "FS_CRASH_CHECK", "FS_OPTIONS",
+        // Plane / Rover equivalents (only shown if the vehicle has them)
+        "THR_FAILSAFE", "THR_FS_VALUE", "FS_SHORT_ACTN", "FS_LONG_ACTN", "FS_LONG_TIMEOUT", "FS_ACTION", "FS_TIMEOUT",
+    ]
+
+    /// REA Parity Source: MissionPlanner ConfigArducopter.cs (Extended Tuning) / ConfigArduplane.cs.
+    static let tuningParams = [
+        "ATC_RAT_RLL_P", "ATC_RAT_RLL_I", "ATC_RAT_RLL_D", "ATC_RAT_PIT_P", "ATC_RAT_PIT_I", "ATC_RAT_PIT_D",
+        "ATC_RAT_YAW_P", "ATC_RAT_YAW_I", "ATC_RAT_YAW_D", "ATC_ANG_RLL_P", "ATC_ANG_PIT_P", "ATC_ANG_YAW_P",
+        "ATC_INPUT_TC", "ATC_ACCEL_R_MAX", "ATC_ACCEL_P_MAX", "ATC_ACCEL_Y_MAX",
+        "INS_GYRO_FILTER", "INS_ACCEL_FILTER", "MOT_THST_HOVER", "MOT_THST_EXPO", "MOT_SPIN_ARM", "MOT_SPIN_MIN",
+        "PSC_ACCZ_P", "PSC_ACCZ_I", "PSC_VELXY_P", "PSC_POSXY_P", "ANGLE_MAX", "PILOT_SPEED_UP", "PILOT_SPEED_DN",
+        "WPNAV_SPEED", "WPNAV_SPEED_UP", "WPNAV_SPEED_DN", "WPNAV_RADIUS", "LOIT_SPEED", "RTL_ALT", "RTL_SPEED",
+        "LAND_SPEED", "AUTOTUNE_AXES", "AUTOTUNE_AGGR",
+        // Plane
+        "RLL_RATE_P", "RLL_RATE_I", "RLL_RATE_D", "PTCH_RATE_P", "PTCH_RATE_I", "PTCH_RATE_D",
+        "AIRSPEED_CRUISE", "TRIM_THROTTLE", "TECS_CLMB_MAX", "TECS_SINK_MAX", "NAVL1_PERIOD",
+    ]
+
     var icon: String {
         switch self {
         case .prearm: return "checklist"
         case .frame: return "airplane"
         case .fence: return "arrow.up.to.line"
+        case .battery: return "battery.75"
+        case .failsafe: return "exclamationmark.shield"
+        case .tuning: return "slider.horizontal.3"
+        case .logs: return "doc.text.magnifyingglass"
         case .accel: return "gyroscope"
         case .compass: return "location.north.circle"
         case .radio: return "dot.radiowaves.left.and.right"
@@ -69,6 +100,12 @@ struct SetupView: View {
                     case .prearm: PrearmPage()
                     case .frame: FramePage()
                     case .fence: FencePage()
+                    case .battery: BatteryPage()
+                    case .failsafe: ParamListPage(title: "Failsafe", names: SetupPage.failsafeParams,
+                                                  footer: "FS_GCS_ENABLE reacts to losing this iPad's heartbeat; over ExpressLRS short dropouts are normal, so use a timeout (FS_GCS_TIMEOUT) of several seconds.")
+                    case .tuning: ParamListPage(title: "Tuning", names: SetupPage.tuningParams,
+                                                footer: "Change one value at a time in small steps and test-fly. Parameters › Save first to keep a backup.")
+                    case .logs: LogsPage()
                     case .accel: AccelPage()
                     case .compass: CompassPage()
                     case .radio: RadioPage()
@@ -614,6 +651,173 @@ struct ParamBitmaskRow: View {
                 }
                 if params.pendingNames.contains(name) { ProgressView() }
             }
+        }
+    }
+}
+// MARK: - Generic parameter pages
+
+/// Picks the right editor from the metadata: list -> picker, bitmask -> checkboxes, else number.
+struct ParamAutoRow: View {
+    @EnvironmentObject var params: ParameterStore
+    let name: String
+
+    var body: some View {
+        let meta = params.metadata[name]
+        if params.params[name] == nil {
+            EmptyView()
+        } else if let m = meta, !m.values.isEmpty {
+            ParamOptionRow(name: name)
+        } else if let m = meta, !m.bits.isEmpty {
+            ParamBitmaskRow(name: name)
+        } else {
+            ParamNumberRow(name: name)
+        }
+    }
+}
+
+struct ParamListPage: View {
+    @EnvironmentObject var params: ParameterStore
+    let title: String
+    let names: [String]
+    let footer: String
+
+    var body: some View {
+        Form {
+            if params.params.isEmpty {
+                Text("Waiting for parameters…").foregroundColor(.secondary)
+            }
+            ForEach(names, id: \.self) { ParamAutoRow(name: $0) }
+            Section {
+                EmptyView()
+            } footer: {
+                Text(footer)
+            }
+        }
+    }
+}
+
+// MARK: - Battery monitor
+
+/// REA Parity Source: MissionPlanner ConfigBatteryMonitoring.cs: monitor type, capacity, and the
+/// "measured voltage" / "measured current" calibration that rescales BATT_VOLT_MULT / BATT_AMP_PERVLT.
+struct BatteryPage: View {
+    @EnvironmentObject var params: ParameterStore
+    @EnvironmentObject var vehicle: VehicleModel
+    @State private var measuredVolts = 0.0
+    @State private var measuredAmps = 0.0
+    @State private var note: String?
+
+    var body: some View {
+        Form {
+            Section("Live") {
+                LabeledContent("Voltage", value: String(format: "%.2f V", vehicle.batteryVoltage))
+                LabeledContent("Current", value: String(format: "%.1f A", vehicle.batteryCurrent))
+                LabeledContent("Remaining", value: vehicle.batteryRemaining >= 0 ? "\(vehicle.batteryRemaining) %" : "—")
+                if let mah = vehicle.batteryConsumedMah { LabeledContent("Consumed", value: "\(mah) mAh") }
+            }
+            ParamAutoRow(name: "BATT_MONITOR")
+            ParamAutoRow(name: "BATT_CAPACITY")
+            ParamAutoRow(name: "BATT_ARM_VOLT")
+            Section {
+                HStack {
+                    Text("Measured with a multimeter")
+                    Spacer()
+                    TextField("V", value: $measuredVolts, format: .number)
+                        .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    Text("V")
+                }
+                Button("Calibrate voltage") { calibrateVolts() }
+                    .disabled(measuredVolts <= 0 || vehicle.batteryVoltage <= 0 || params.params["BATT_VOLT_MULT"] == nil)
+                HStack {
+                    Text("Measured current")
+                    Spacer()
+                    TextField("A", value: $measuredAmps, format: .number)
+                        .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    Text("A")
+                }
+                Button("Calibrate current") { calibrateAmps() }
+                    .disabled(measuredAmps <= 0 || vehicle.batteryCurrent <= 0.2 || params.params["BATT_AMP_PERVLT"] == nil)
+                if let n = note { Text(n).font(.caption) }
+            } header: {
+                Text("Calibration")
+            } footer: {
+                Text("Measure the battery voltage at the connector, enter it and tap Calibrate. The app rescales BATT_VOLT_MULT so the reading matches (current: BATT_AMP_PERVLT, under a steady load).")
+            }
+            ParamAutoRow(name: "BATT_VOLT_MULT")
+            ParamAutoRow(name: "BATT_AMP_PERVLT")
+            ParamAutoRow(name: "BATT_AMP_OFFSET")
+        }
+    }
+
+    private func calibrateVolts() {
+        guard let mult = params.params["BATT_VOLT_MULT"]?.value, vehicle.batteryVoltage > 0 else { return }
+        let new = Double(mult) * measuredVolts / vehicle.batteryVoltage
+        params.set("BATT_VOLT_MULT", Float(new))
+        note = String(format: "BATT_VOLT_MULT %.4f → %.4f", mult, new)
+    }
+
+    private func calibrateAmps() {
+        guard let per = params.params["BATT_AMP_PERVLT"]?.value, vehicle.batteryCurrent > 0 else { return }
+        let new = Double(per) * measuredAmps / vehicle.batteryCurrent
+        params.set("BATT_AMP_PERVLT", Float(new))
+        note = String(format: "BATT_AMP_PERVLT %.3f → %.3f", per, new)
+    }
+}
+
+// MARK: - DataFlash logs
+
+struct LogsPage: View {
+    @EnvironmentObject var logs: LogStore
+    @EnvironmentObject var vehicle: VehicleModel
+    @State private var confirmErase = false
+
+    var body: some View {
+        Form {
+            Section {
+                HStack {
+                    Button { logs.refresh() } label: { Label("List logs on the vehicle", systemImage: "arrow.clockwise") }
+                        .disabled(logs.listing || logs.downloading != nil)
+                    if logs.listing { ProgressView() }
+                }
+                if let m = logs.message { Text(m).font(.callout) }
+            } footer: {
+                Text("Downloads .bin logs over MAVLink into Files › Mission Planner › logs › dataflash. Over ExpressLRS expect only a few kB/s (a 5 MB log takes 30+ minutes); over a Wi-Fi bridge it is much faster.")
+            }
+            if let d = logs.downloading {
+                Section("Downloading log \(d.id)") {
+                    ProgressView(value: Double(logs.received), total: Double(max(1, Int(d.size))))
+                    Text("\(ByteCountFormatter.string(fromByteCount: Int64(logs.received), countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: Int64(d.size), countStyle: .file)) · \(String(format: "%.1f", logs.rate / 1024)) kB/s")
+                        .font(.caption).monospacedDigit()
+                    Button("Cancel", role: .destructive) { logs.cancel() }
+                }
+            }
+            Section("Logs") {
+                if logs.entries.isEmpty { Text("Tap List to read the log list").foregroundColor(.secondary) }
+                ForEach(logs.entries) { e in
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Log \(e.id)")
+                            Text(e.date.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "no date")
+                                .font(.caption).foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Text(ByteCountFormatter.string(fromByteCount: Int64(e.size), countStyle: .file))
+                            .foregroundColor(.secondary)
+                        Button("Download") { logs.start(e) }
+                            .disabled(logs.downloading != nil || vehicle.armed)
+                    }
+                }
+            }
+            Section {
+                Button("Erase all logs on the vehicle", role: .destructive) { confirmErase = true }
+                    .disabled(logs.entries.isEmpty || vehicle.armed)
+            }
+        }
+        .alert("Erase all logs?", isPresented: $confirmErase) {
+            Button("Erase", role: .destructive) { logs.eraseAll() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Deletes every DataFlash log on the flight controller's SD card. This can't be undone.")
         }
     }
 }
