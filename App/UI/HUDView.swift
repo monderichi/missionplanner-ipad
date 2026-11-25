@@ -16,6 +16,8 @@ struct HUDView: View {
     var armed: Bool
     var mode: String
     var linkAlive: Bool
+    /// Heartbeats arrive but ATTITUDE doesn't: the horizon would be frozen, so say so.
+    var attitudeStale: Bool = false
 
     // computed (not stored) so they don't make the memberwise init private
     private var sky: Color { Color(red: 0.20, green: 0.45, blue: 0.85) }
@@ -120,6 +122,13 @@ struct HUDView: View {
                         .foregroundColor(armed ? .red : .green), at: CGPoint(x: cx, y: h - 40))
             ctx.draw(Text(mode).font(.system(size: 14, weight: .bold)).foregroundColor(.white),
                      at: CGPoint(x: cx, y: h - 20))
+
+            if linkAlive && attitudeStale {
+                let banner = CGRect(x: w * 0.15, y: cy - 50 - 30, width: w * 0.7, height: 30)
+                ctx.fill(Path(roundedRect: banner, cornerRadius: 6), with: .color(.orange.opacity(0.9)))
+                ctx.draw(Text("NO ATTITUDE DATA · re-requesting").font(.system(size: 14, weight: .heavy)).foregroundColor(.black),
+                         at: CGPoint(x: banner.midX, y: banner.midY))
+            }
 
             if !linkAlive {
                 let banner = CGRect(x: w * 0.2, y: cy - 50 - 30, width: w * 0.6, height: 30)

@@ -100,6 +100,10 @@ final class VehicleModel: ObservableObject {
 
     private var statusChunks: [UInt16: String] = [:]
     static let heartbeatTimeout: TimeInterval = 5
+    static let attitudeTimeout: TimeInterval = 3
+    private var lastAttitude: Date?
+    /// Heartbeats arrive but no ATTITUDE for a few seconds: the HUD would be frozen.
+    @Published private(set) var attitudeStale = false
     static let maxMessages = 300
 
     var modeName: String {
@@ -148,6 +152,8 @@ final class VehicleModel: ObservableObject {
         magCalProgress = [:]
         magCalReports = [:]
         lastReachedWaypoint = nil
+        lastAttitude = nil
+        attitudeStale = false
     }
 
     func clearTrail() { trail = [] }
@@ -177,6 +183,15 @@ final class VehicleModel: ObservableObject {
     func tick(now: Date = Date()) {
         let alive = lastHeartbeat.map { now.timeIntervalSince($0) < Self.heartbeatTimeout } ?? false
         if alive != heartbeatAlive { heartbeatAlive = alive }
+        let stale = alive && (lastAttitude.map { now.timeIntervalSince($0) > Self.attitudeTimeout } ?? true)
+        if stale != attitudeStale { attitudeStale = stale }
+    }
+
+    /// Heartbeat from a flight controller (not a GCS, gimbal, camera, OSD, radio...).
+    static func isVehicleAutopilot(_ hb: MAV.Heartbeat) -> Bool {
+        guard hb.type != MAVType.gcs.rawValue, hb.autopilot != MAVAutopilot.invalid else { return false }
+        guard let t = MAVType(rawValue: hb.type) else { return false }
+        return t.firmware != .other
     }
 
     /// Returns true when this heartbeat is the first from a (new) vehicle, so the link
@@ -187,10 +202,14 @@ final class VehicleModel: ObservableObject {
         var newVehicle = false
 
         if packet.messageID == MAV.Heartbeat.mavInfo.id, let hb = packet.decode(MAV.Heartbeat.self) {
-            // Ignore other GCSs, gimbals, cameras... (MAVList keys vehicles by sysid/compid).
-            guard hb.type != MAVType.gcs.rawValue, hb.autopilot != MAVAutopilot.invalid else { return false }
-            if systemID == nil || !heartbeatAlive {
-                newVehicle = systemID != packet.systemID || !heartbeatAlive
+            // Only a real vehicle's autopilot drives the HUD. ArduPilot forwards heartbeats from
+            // gimbals, OSDs, companions etc. on other serial ports (often autopilot=GENERIC), and
+            // locking onto one of those froze the HUD. MAVList keys vehicles by sysid/compid and the
+            // flight controller is component 1 (MAV_COMP_ID_AUTOPILOT1).
+            guard Self.isVehicleAutopilot(hb) else { return false }
+            let preferThis = packet.componentID == 1 && packet.systemID == systemID && componentID != 1
+            if systemID == nil || !heartbeatAlive || preferThis {
+                newVehicle = systemID != packet.systemID || componentID != packet.componentID || !heartbeatAlive
                 systemID = packet.systemID
                 componentID = packet.componentID
             }
@@ -216,6 +235,7 @@ final class VehicleModel: ObservableObject {
         switch packet.messageID {
         case MAV.Attitude.mavInfo.id:
             guard let m = packet.decode(MAV.Attitude.self) else { break }
+            lastAttitude = Date()
             roll = Double(m.roll) * 180 / .pi
             pitch = Double(m.pitch) * 180 / .pi
             yaw = Self.wrap360(Double(m.yaw) * 180 / .pi)

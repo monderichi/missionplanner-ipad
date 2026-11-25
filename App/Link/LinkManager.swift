@@ -54,6 +54,8 @@ final class LinkManager: ObservableObject {
     private var narrowLink = false
     /// sysid the parameter/command sessions are attached to (survives short link dropouts).
     private var attachedSystem: UInt8?
+    private var attachedComponent: UInt8?
+    private var lastStreamRequest = Date.distantPast
     private var redownloadAfterReboot = false
 
     init() {
@@ -176,6 +178,7 @@ final class LinkManager: ObservableObject {
         mission.detach()
         isReplaying = false
         attachedSystem = nil
+        attachedComponent = nil
         redownloadAfterReboot = false
         transport?.onReceive = nil
         transport?.onStateChange = nil // a late callback from the old link must not overwrite the new state
@@ -210,8 +213,22 @@ final class LinkManager: ObservableObject {
         }
     }
 
+    /// Heartbeats but no ATTITUDE for a few seconds: ask again, both the classic way and with
+    /// SET_MESSAGE_INTERVAL, at most every 8 s (cheap on ELRS: a handful of small packets).
+    private func attitudeWatchdog() {
+        guard !isReplaying, vehicle.attitudeStale, commands.isAttached,
+              Date().timeIntervalSince(lastStreamRequest) > 8 else { return }
+        requestDataStreams()
+        let hud: Double = narrowLink ? 4 : 10
+        commands.setMessageInterval(MAV.Attitude.mavInfo.id, hz: hud)
+        commands.setMessageInterval(MAV.VfrHud.mavInfo.id, hz: narrowLink ? 2 : 4)
+        commands.setMessageInterval(MAV.GlobalPositionInt.mavInfo.id, hz: narrowLink ? 2 : 3)
+        commands.setMessageInterval(MAV.SysStatus.mavInfo.id, hz: 1)
+    }
+
     /// REQUEST_DATA_STREAM for each stream, as MAVLinkInterface.requestDatastream does.
     func requestDataStreams() {
+        lastStreamRequest = Date()
         guard let sys = vehicle.systemID else { return }
         let comp = vehicle.componentID
         for (stream, rate) in streamRates.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
@@ -232,6 +249,7 @@ final class LinkManager: ObservableObject {
             if sendHeartbeat { self.send(MAV.Heartbeat(customMode: 0, type: MAVType.gcs.rawValue, autopilot: MAVAutopilot.invalid,
                                     baseMode: 0, systemStatus: MAVState.active.rawValue, mavlinkVersion: 3)) }
             self.vehicle.tick()
+            self.attitudeWatchdog()
             self.ioQueue.async {
                 let s = self.parser.stats
                 let n = self.pendingBytes
@@ -261,8 +279,9 @@ final class LinkManager: ObservableObject {
     private func vehicleAppeared() {
         guard !isReplaying, let sys = vehicle.systemID else { return }
         let comp = vehicle.componentID
-        if attachedSystem != sys {
+        if attachedSystem != sys || attachedComponent != comp {
             attachedSystem = sys
+            attachedComponent = comp
             params.attach(systemID: sys, componentID: comp, vehicleType: vehicle.vehicleType, narrowLink: narrowLink)
             commands.attach(systemID: sys, componentID: comp, narrowLink: narrowLink)
             mission.attach(systemID: sys, componentID: comp, vehicleType: vehicle.vehicleType, narrowLink: narrowLink)

@@ -46,7 +46,8 @@ struct RootView: View {
                                 airspeed: vehicle.airspeed, groundspeed: vehicle.groundspeed,
                                 altitude: vehicle.relativeAltitude, climbRate: vehicle.climbRate,
                                 armed: vehicle.armed, mode: vehicle.modeName,
-                                linkAlive: vehicle.heartbeatAlive || !link.state.isActive)
+                                linkAlive: vehicle.heartbeatAlive || !link.state.isActive,
+                                attitudeStale: vehicle.attitudeStale)
                             .frame(height: min(geo.size.height * 0.48, 340))
                         Picker("Tab", selection: $tab) {
                             ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }

@@ -71,6 +71,23 @@ final class CommandCenter: ObservableObject {
         lastResult = "\(label)…"
     }
 
+    /// Fire-and-forget COMMAND_LONG with no banner and no retry (background stream requests).
+    func sendQuiet(_ command: UInt16, params p: [Float]) {
+        guard let session else { return }
+        let v = p + [Float](repeating: 0, count: max(0, 7 - p.count))
+        send?(MAV.CommandLong(param1: v[0], param2: v[1], param3: v[2], param4: v[3], param5: v[4], param6: v[5],
+                              param7: v[6], command: command, targetSystem: session.targetSystem,
+                              targetComponent: session.targetComponent, confirmation: 0))
+        quietAcks.insert(command)
+    }
+
+    /// MAV_CMD_SET_MESSAGE_INTERVAL (511): param1 message id, param2 interval in microseconds.
+    func setMessageInterval(_ id: UInt32, hz: Double) {
+        sendQuiet(MAVCmd.setMessageInterval, params: [Float(id), Float(hz > 0 ? 1_000_000 / hz : -1)])
+    }
+
+    private var quietAcks: Set<UInt16> = []
+
     /// MAV_CMD_REQUEST_MESSAGE (e.g. HOME_POSITION = 242).
     func requestMessage(_ id: UInt32) {
         guard let session else { return }
@@ -86,6 +103,9 @@ final class CommandCenter: ObservableObject {
     private var quiet: Set<UInt16> = []
 
     func handle(_ ack: MAV.CommandAck) {
+        if quietAcks.contains(ack.command) && session?.pendingCommands.contains(ack.command) != true {
+            return // ACK of a background request: nothing to show
+        }
         if untracked.contains(ack.command) {
             untracked.remove(ack.command)
             let label = names[ack.command] ?? "Command \(ack.command)"

@@ -9,6 +9,7 @@ import SwiftUI
 enum SetupPage: String, CaseIterable, Identifiable {
     case prearm = "Pre-arm & sensors"
     case frame = "Frame type"
+    case fence = "Geofence & max altitude"
     case accel = "Accelerometer"
     case compass = "Compass"
     case radio = "Radio calibration"
@@ -21,6 +22,7 @@ enum SetupPage: String, CaseIterable, Identifiable {
         switch self {
         case .prearm: return "checklist"
         case .frame: return "airplane"
+        case .fence: return "arrow.up.to.line"
         case .accel: return "gyroscope"
         case .compass: return "location.north.circle"
         case .radio: return "dot.radiowaves.left.and.right"
@@ -66,6 +68,7 @@ struct SetupView: View {
                     switch page {
                     case .prearm: PrearmPage()
                     case .frame: FramePage()
+                    case .fence: FencePage()
                     case .accel: AccelPage()
                     case .compass: CompassPage()
                     case .radio: RadioPage()
@@ -485,6 +488,132 @@ struct MotorTestPage: View {
                 }
             }
             .disabled(!propsOff || vehicle.armed)
+        }
+    }
+}
+
+// MARK: - Geofence / maximum altitude
+
+/// REA Parity Source: MissionPlanner GCSViews/ConfigurationView/ConfigAC_Fence.cs
+/// (FENCE_ENABLE, FENCE_TYPE bitmask, FENCE_ACTION, FENCE_ALT_MAX, FENCE_RADIUS, FENCE_MARGIN).
+struct FencePage: View {
+    @EnvironmentObject var params: ParameterStore
+    @State private var quickAlt = 120.0
+
+    private var available: Bool { params.params["FENCE_ALT_MAX"] != nil }
+
+    var body: some View {
+        Form {
+            if params.params.isEmpty {
+                Text("Waiting for parameters…").foregroundColor(.secondary)
+            } else if !available {
+                Text("This firmware has no FENCE_ALT_MAX parameter.").foregroundColor(.secondary)
+            } else {
+                Section {
+                    HStack {
+                        Text("Maximum altitude")
+                        Spacer()
+                        TextField("m", value: $quickAlt, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 80)
+                        Text("m above home")
+                    }
+                    Button {
+                        limitAltitude()
+                    } label: {
+                        Label("Apply altitude limit", systemImage: "arrow.up.to.line")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(quickAlt < 10 || quickAlt > 1000)
+                } header: {
+                    Text("Quick setup")
+                } footer: {
+                    Text("Writes FENCE_ALT_MAX, turns on the altitude fence (FENCE_TYPE bit 0), sets FENCE_ENABLE = 1 and, if it was \"Report only\", FENCE_ACTION = RTL or Land. If the vehicle climbs above this height it returns or lands. Keep the circle/polygon fences as they are, or adjust them below.")
+                }
+                ParamOptionRow(name: "FENCE_ENABLE")
+                ParamBitmaskRow(name: "FENCE_TYPE")
+                ParamNumberRow(name: "FENCE_ALT_MAX")
+                ParamOptionRow(name: "FENCE_ACTION")
+                ParamNumberRow(name: "FENCE_RADIUS")
+                ParamNumberRow(name: "FENCE_MARGIN")
+                ParamOptionRow(name: "FENCE_AUTOENABLE")
+                Section {
+                    EmptyView()
+                } footer: {
+                    Text("The circle and polygon fences need a GPS fix to arm. The altitude fence is measured from home (where the vehicle armed). Test the limit at a safe height first.")
+                }
+            }
+        }
+        .onAppear {
+            if let v = params.params["FENCE_ALT_MAX"]?.value { quickAlt = Double(v) }
+        }
+    }
+
+    private func limitAltitude() {
+        var out: [String: Float] = ["FENCE_ALT_MAX": Float(quickAlt), "FENCE_ENABLE": 1]
+        let type = UInt32(max(0, params.params["FENCE_TYPE"]?.value ?? 0))
+        out["FENCE_TYPE"] = Float(type | 1)
+        if (params.params["FENCE_ACTION"]?.value ?? 0) == 0 { out["FENCE_ACTION"] = 1 }
+        params.setMany(out)
+    }
+}
+
+/// Numeric parameter with range/units from the metadata and an explicit Write button.
+struct ParamNumberRow: View {
+    @EnvironmentObject var params: ParameterStore
+    let name: String
+    @State private var text = ""
+
+    var body: some View {
+        if let p = params.params[name] {
+            let meta = params.metadata[name]
+            Section {
+                HStack {
+                    TextField(name, text: $text)
+                        .keyboardType(.numbersAndPunctuation)
+                        .font(.system(.body, design: .monospaced))
+                    if let u = meta?.units { Text(u).foregroundColor(.secondary) }
+                    if params.pendingNames.contains(name) {
+                        ProgressView()
+                    } else {
+                        Button("Write") {
+                            if let v = Float(text.replacingOccurrences(of: ",", with: ".")), v.isFinite { params.set(name, v) }
+                        }
+                        .disabled(Float(text.replacingOccurrences(of: ",", with: ".")) == nil
+                                  || Float(text.replacingOccurrences(of: ",", with: ".")) == p.value)
+                    }
+                }
+            } header: {
+                Text("\(meta?.displayName ?? name) (\(name))")
+            } footer: {
+                if let r = meta?.range {
+                    Text("Range \(ParamFile.formatValue(Float(r.lowerBound))) … \(ParamFile.formatValue(Float(r.upperBound))). Current \(ParamFile.formatValue(p.value)).")
+                }
+            }
+            .onAppear { text = ParamFile.formatValue(p.value) }
+            .onChange(of: p.value) { text = ParamFile.formatValue($0) }
+        }
+    }
+}
+
+/// Bitmask parameter as toggles; each change is written immediately.
+struct ParamBitmaskRow: View {
+    @EnvironmentObject var params: ParameterStore
+    let name: String
+
+    var body: some View {
+        if let p = params.params[name], let bits = params.metadata[name]?.bits, !bits.isEmpty {
+            let value = UInt32(max(0, p.value))
+            Section("\(params.metadata[name]?.displayName ?? name) (\(name))") {
+                ForEach(bits) { b in
+                    let mask = UInt32(1) << UInt32(b.code)
+                    Toggle(b.label, isOn: Binding(get: { value & mask != 0 }, set: { on in
+                        params.set(name, Float(on ? value | mask : value & ~mask))
+                    }))
+                }
+                if params.pendingNames.contains(name) { ProgressView() }
+            }
         }
     }
 }
