@@ -7,6 +7,7 @@
 
 import Foundation
 import MapKit
+import UIKit
 
 enum TileSource: String, CaseIterable, Identifiable {
     case appleHybrid = "Apple Satellite"
@@ -59,7 +60,7 @@ final class TileCache {
 
     private init() {
         let config = URLSessionConfiguration.default
-        config.httpMaximumConnectionsPerHost = 4
+        config.httpMaximumConnectionsPerHost = 6
         config.timeoutIntervalForRequest = 15
         config.requestCachePolicy = .reloadIgnoringLocalCacheData // we keep our own cache
         config.httpAdditionalHeaders = ["User-Agent": "MissionPlannerPad/0.3 (iPadOS ground control station)"]
@@ -129,7 +130,7 @@ final class TileCache {
         let lock = NSLock()
         let total = tiles.count
         var finished = 0, failed = 0
-        let sem = DispatchSemaphore(value: 4)
+        let sem = DispatchSemaphore(value: 6)
         DispatchQueue.global(qos: .utility).async {
             let group = DispatchGroup()
             for t in tiles {
@@ -193,8 +194,31 @@ final class CachedTileOverlay: MKTileOverlay {
     }
 
     override func loadTile(at path: MKTileOverlayPath, result: @escaping (Data?, Error?) -> Void) {
+        let source = self.source
         TileCache.shared.load(source, z: path.z, x: path.x, y: path.y) { data in
-            result(data, data == nil ? URLError(.resourceUnavailable) : nil)
+            if let data { return result(data, nil) }
+            // Offline and not saved at this zoom: enlarge the matching part of a saved parent tile.
+            if let up = Self.overzoom(source, z: path.z, x: path.x, y: path.y) { return result(up, nil) }
+            result(nil, URLError(.resourceUnavailable))
         }
+    }
+
+    /// Crops the quadrant of the nearest cached ancestor (up to 6 levels up) and scales it to 256 px.
+    static func overzoom(_ source: TileSource, z: Int, x: Int, y: Int) -> Data? {
+        for k in 1...6 where z - k >= 0 {
+            guard let data = TileCache.shared.cached(source, z: z - k, x: x >> k, y: y >> k),
+                  let image = UIImage(data: data)?.cgImage else { continue }
+            let parts = 1 << k
+            let w = CGFloat(image.width) / CGFloat(parts), h = CGFloat(image.height) / CGFloat(parts)
+            let ox = CGFloat(x - ((x >> k) << k)) * w, oy = CGFloat(y - ((y >> k) << k)) * h
+            guard let crop = image.cropping(to: CGRect(x: ox, y: oy, width: w, height: h).integral) else { continue }
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            let out = UIGraphicsImageRenderer(size: CGSize(width: 256, height: 256), format: format).image { _ in
+                UIImage(cgImage: crop).draw(in: CGRect(x: 0, y: 0, width: 256, height: 256))
+            }
+            return out.jpegData(compressionQuality: 0.85)
+        }
+        return nil
     }
 }

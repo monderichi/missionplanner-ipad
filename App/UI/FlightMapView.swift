@@ -81,14 +81,12 @@ struct FlightMapView: View {
     }
 }
 
-/// Map source picker + offline area download, shared by Flight Data and Plan.
+/// Map source picker + offline maps, shared by Flight Data and Plan.
 struct MapToolsMenu: View {
     @Binding var sourceRaw: String
     var visible: (MKMapRect, Int)?
-    @State private var downloading: (done: Int, total: Int, failed: Int)?
-    @State private var cancel: (() -> Void)?
-    @State private var confirm: [TileCache.TileKey]?
-    @State private var message: String?
+    @ObservedObject private var offline = OfflineMapStore.shared
+    @State private var showOffline = false
 
     private var source: TileSource { TileSource(rawValue: sourceRaw) ?? .appleHybrid }
 
@@ -98,77 +96,186 @@ struct MapToolsMenu: View {
                 Picker("Map", selection: $sourceRaw) {
                     ForEach(TileSource.allCases) { Text($0.rawValue).tag($0.rawValue) }
                 }
-                if source.allowsAreaDownload {
-                    Button {
-                        prepareDownload()
-                    } label: {
-                        Label("Download visible area for offline use", systemImage: "arrow.down.circle")
-                    }
-                    Button {
-                        let bytes = TileCache.shared.size(source)
-                        message = "Offline tiles: \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))"
-                    } label: {
-                        Label("Offline tiles size", systemImage: "internaldrive")
-                    }
-                    Button(role: .destructive) {
-                        TileCache.shared.clear(source)
-                        message = "Offline tiles deleted"
-                    } label: {
-                        Label("Delete offline tiles", systemImage: "trash")
-                    }
+                Button {
+                    showOffline = true
+                } label: {
+                    Label("Offline maps…", systemImage: "square.and.arrow.down.on.square")
                 }
             } label: {
                 Label("Map", systemImage: "map")
                     .padding(8)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
             }
-            if let d = downloading {
+            if let d = offline.progress {
                 HStack {
                     ProgressView(value: Double(d.done), total: Double(max(d.total, 1))).frame(width: 120)
                     Text("\(d.done)/\(d.total)").font(.caption).monospacedDigit()
-                    Button("Stop") { cancel?(); downloading = nil }
+                    Button("Stop") { offline.cancel() }
                 }
                 .padding(8)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
             }
-            if let m = message {
-                Text(m).font(.caption).padding(6)
+            if let m = offline.message, !showOffline {
+                Text(m).font(.caption).padding(6).frame(maxWidth: 320, alignment: .trailing)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
-                    .onTapGesture { message = nil }
+                    .onTapGesture { offline.message = nil }
             }
         }
-        .alert("Download offline map?", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } })) {
-            Button("Download") { if let t = confirm { start(t) } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("\(confirm?.count ?? 0) tiles of the visible area, from this zoom to 4 levels closer (max 19). Do this at home on internet Wi-Fi; at the field the ExpressLRS hotspot has no internet.")
+        .sheet(isPresented: $showOffline) {
+            OfflineMapSheet(sourceRaw: $sourceRaw, visible: visible)
+        }
+    }
+}
+
+/// Save a circle of map tiles for use without internet.
+struct OfflineMapSheet: View {
+    @EnvironmentObject var vehicle: VehicleModel
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var offline = OfflineMapStore.shared
+    @Binding var sourceRaw: String
+    var visible: (MKMapRect, Int)?
+
+    enum Center: String, CaseIterable, Identifiable {
+        case map = "Map centre", vehicle = "Drone", home = "Home"
+        var id: String { rawValue }
+    }
+
+    @AppStorage("offline.radiusKm") private var radiusKm = 10.0
+    @AppStorage("offline.maxZoom") private var maxZoom = 17
+    @AppStorage("offline.detail") private var detail = true
+    @State private var center = Center.map
+    @State private var name = ""
+    @State private var confirmClear = false
+    @State private var spaceUsed: Int64 = 0
+
+    private var source: TileSource { .esriImagery } // the provider that allows saving areas
+
+    private var centerCoordinate: CLLocationCoordinate2D? {
+        switch center {
+        case .map:
+            guard let v = visible else { return nil }
+            return MKMapPoint(x: v.0.midX, y: v.0.midY).coordinate
+        case .vehicle:
+            return vehicle.position.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+        case .home:
+            return vehicle.home.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
         }
     }
 
-    private func prepareDownload() {
-        guard let v = visible else { return }
-        let rect = v.0, zoom = v.1
-        let z0 = max(1, min(zoom, 18))
-        var z1 = min(source.maxZoom, z0 + 4)
-        var tiles = TileCache.tiles(in: rect, zooms: z0...z1)
-        while tiles.count > 6000 && z1 > z0 { // keep it reasonable (and polite to the provider)
-            z1 -= 1
-            tiles = TileCache.tiles(in: rect, zooms: z0...z1)
-        }
-        if tiles.count > 6000 {
-            message = "Area too large: zoom in further and try again"
-        } else {
-            confirm = tiles
+    private var estimate: Int {
+        guard let c = centerCoordinate else { return 0 }
+        return OfflineMapStore.plan(center: c, radiusKm: radiusKm, maxZoom: maxZoom, detail: detail).count
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if sourceRaw != TileSource.esriImagery.rawValue {
+                    Section {
+                        Button {
+                            sourceRaw = TileSource.esriImagery.rawValue
+                        } label: {
+                            Label("Switch the map to Esri Satellite", systemImage: "globe.europe.africa")
+                        }
+                    } footer: {
+                        Text("Saved areas use Esri satellite imagery. Apple's maps can't be stored, so without internet they stay blank.")
+                    }
+                }
+                Section {
+                    Picker("Centre", selection: $center) {
+                        ForEach(Center.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    if let c = centerCoordinate {
+                        Text(String(format: "%.5f, %.5f", c.latitude, c.longitude)).font(.caption).foregroundColor(.secondary)
+                    } else {
+                        Text(center == .map ? "Move the map first" : "Not known yet (connect to the drone)")
+                            .font(.caption).foregroundColor(.orange)
+                    }
+                    VStack(alignment: .leading) {
+                        HStack {
+                            Text("Radius")
+                            Spacer()
+                            Text("\(Int(radiusKm)) km").monospacedDigit()
+                        }
+                        Slider(value: $radiusKm, in: 1...20, step: 1)
+                    }
+                    Picker("Detail", selection: $maxZoom) {
+                        Text("Normal (zoom 16)").tag(16)
+                        Text("High (zoom 17)").tag(17)
+                        Text("Very high (zoom 18)").tag(18)
+                    }
+                    Toggle("Extra detail within 2 km of the centre", isOn: $detail)
+                    TextField("Name (e.g. flying field)", text: $name)
+                } header: {
+                    Text("Area to save")
+                }
+                Section {
+                    LabeledContent("Tiles", value: "\(estimate)")
+                    LabeledContent("About", value: ByteCountFormatter.string(fromByteCount: Int64(estimate * OfflineMapStore.bytesPerTile), countStyle: .file))
+                    if let p = offline.progress {
+                        ProgressView(value: Double(p.done), total: Double(max(p.total, 1)))
+                        Text("\(p.done) / \(p.total)\(p.failed > 0 ? " · \(p.failed) failed" : "")").font(.caption).monospacedDigit()
+                        Button("Stop", role: .destructive) { offline.cancel() }
+                    } else {
+                        Button {
+                            guard let c = centerCoordinate else { return }
+                            let n = name.trimmingCharacters(in: .whitespaces)
+                            offline.downloadArea(name: n.isEmpty ? String(format: "%.3f, %.3f", c.latitude, c.longitude) : n,
+                                                 center: c, radiusKm: radiusKm, maxZoom: maxZoom, detail: detail, source: source)
+                            sourceRaw = TileSource.esriImagery.rawValue
+                        } label: {
+                            Label("Download for offline use", systemImage: "arrow.down.circle.fill")
+                        }
+                        .disabled(centerCoordinate == nil || estimate == 0 || estimate > OfflineMapStore.maxTiles)
+                    }
+                    if let m = offline.message { Text(m).font(.callout) }
+                } footer: {
+                    Text("Do this at home on internet Wi-Fi, before going to the field (the ExpressLRS hotspot has no internet). Keep the app open until it finishes; the screen stays on. Already-saved tiles are skipped, so Update only fetches what's missing.")
+                }
+                Section("Saved areas") {
+                    if offline.areas.isEmpty { Text("None yet").foregroundColor(.secondary) }
+                    ForEach(offline.areas) { a in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(a.name)
+                                Text("\(Int(a.radiusKm)) km · zoom \(a.maxZoom)\(a.detailZoom.map { "+\($0) centre" } ?? "") · \(a.tileCount) tiles · \(a.date.formatted(date: .abbreviated, time: .omitted))")
+                                    .font(.caption).foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Button("Update") { offline.update(a) }
+                                .disabled(offline.isDownloading)
+                        }
+                        .swipeActions {
+                            Button("Remove", role: .destructive) { offline.remove(a) }
+                        }
+                    }
+                    LabeledContent("Space used", value: ByteCountFormatter.string(fromByteCount: spaceUsed, countStyle: .file))
+                    Button("Delete all offline map tiles", role: .destructive) { confirmClear = true }
+                        .disabled(offline.isDownloading)
+                }
+            }
+            .navigationTitle("Offline maps")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .onAppear {
+                if visible == nil { center = vehicle.position != nil ? .vehicle : .home }
+                refreshSpace()
+            }
+            .onChange(of: offline.isDownloading) { _ in refreshSpace() }
+            .confirmationDialog("Delete all offline tiles?", isPresented: $confirmClear, titleVisibility: .visible) {
+                Button("Delete", role: .destructive) { offline.clearAll(source); refreshSpace() }
+            } message: {
+                Text("The map will need internet again until you re-download an area.")
+            }
         }
     }
 
-    private func start(_ tiles: [TileCache.TileKey]) {
-        downloading = (0, tiles.count, 0)
-        cancel = TileCache.shared.download(source, tiles: tiles, progress: { done, total, failed in
-            downloading = (done, total, failed)
-        }, done: { done, failed in
-            downloading = nil
-            message = failed > 0 ? "Saved \(done - failed) tiles, \(failed) failed (no internet?)" : "Saved \(done) tiles for offline use"
-        })
+    private func refreshSpace() {
+        let s = source
+        DispatchQueue.global(qos: .utility).async {
+            let bytes = TileCache.shared.size(s)
+            DispatchQueue.main.async { spaceUsed = bytes }
+        }
     }
 }
