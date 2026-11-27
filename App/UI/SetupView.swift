@@ -870,6 +870,12 @@ struct LogsPage: View {
             }
         }
         .sheet(isPresented: $showReview) { LogReviewPicker() }
+        .onAppear {
+            // Test automation only: -MPOpenLogReview YES opens the log review sheet.
+            if UserDefaults.standard.bool(forKey: "MPOpenLogReview") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { showReview = true }
+            }
+        }
         .alert("Erase all logs?", isPresented: $confirmErase) {
             Button("Erase", role: .destructive) { logs.eraseAll() }
             Button("Cancel", role: .cancel) {}

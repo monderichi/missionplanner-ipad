@@ -67,6 +67,23 @@ shot 12-params 18 "${C[@]}" -MPScreen params
 shot 13-diagnostics 12 "${C[@]}" -MPScreen data -MPShowDiagnostics YES
 shot 14-data-messages 16 "${C[@]}" -MPScreen data -MPTab messages
 
+shot 15-data-graph 20 "${C[@]}" -MPScreen data -MPTab graph
+shot 16-map-adsb 16 "${C[@]}" -MPScreen data -MPTab quick
+shot 17-setup-servo 16 "${C[@]}" -MPScreen setup -MPSetupPage servo
+shot 18-setup-othercal 12 "${C[@]}" -MPScreen setup -MPSetupPage othercal
+shot 19-setup-compass 12 "${C[@]}" -MPScreen setup -MPSetupPage compass
+shot 20-setup-planner 8 -MPScreen setup -MPSetupPage planner
+shot 21-setup-rangefinder 16 "${C[@]}" -MPScreen setup -MPSetupPage rangefinder
+shot 22-inspector 14 "${C[@]}" -MPScreen data -MPShowInspector YES
+
+# DataFlash log review: put the test fixture in the app's Documents (the container exists after the first launch)
+DATA=$(xcrun simctl get_app_container "$UDID" "$BID" data 2>/dev/null || true)
+if [ -n "$DATA" ]; then
+  mkdir -p "$DATA/Documents/logs/dataflash"
+  cp Packages/MAVLinkKit/Tests/MAVLinkKitTests/Fixtures/sample.bin "$DATA/Documents/logs/dataflash/sample.bin" 2>/dev/null || echo "!! sample.bin fixture missing" | tee -a "$OUT/notes.txt"
+fi
+shot 23-log-review 16 "${C[@]}" -MPScreen setup -MPSetupPage logs -MPOpenLogReview YES
+
 # telemetry logs from the simulator (proves which MAVLink messages, e.g. STATUSTEXT, reached the app)
 DATA=$(xcrun simctl get_app_container "$UDID" "$BID" data 2>/dev/null || true)
 mkdir -p "$OUT/tlogs"

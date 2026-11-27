@@ -160,6 +160,23 @@ class Vehicle:
                 self.send(36, time_usec=int(t * 1e6) & 0xFFFFFFFF, port=0,
                           **{f"servo{i}_raw": v for i, v in enumerate([1000, 1000, 1000, 1000, 1500, 1100, 0, 0], 1)})
                 self.send(42, seq=2, total=len(self.mission) - 1)
+            if n % 10 == 5:
+                # two fake aircraft circling HOME (ADSB_VEHICLE)
+                for icao, call, radius, alt_m, speed, phase in (
+                        (0xABC123, b"TEST123", 800.0, 300.0, 60.0, 0.0),
+                        (0x4CA1F2, b"SKY42", 1500.0, 900.0, 120.0, 2.0)):
+                    omega = speed / radius  # rad/s, counter-clockwise
+                    ang = phase + omega * t
+                    dn = radius * math.sin(ang)
+                    de = radius * math.cos(ang)
+                    alat = HOME[0] + dn / 111320.0
+                    alon = HOME[1] + de / (111320.0 * math.cos(math.radians(HOME[0])))
+                    # velocity direction for CCW motion: d(east)/dt = -sin, d(north)/dt = cos -> bearing atan2(E, N)
+                    hdg = math.degrees(math.atan2(-math.sin(ang), math.cos(ang))) % 360
+                    self.send(246, ICAO_address=icao, lat=int(alat * 1e7), lon=int(alon * 1e7),
+                              altitude=int(alt_m * 1000), heading=int(hdg * 100) % 36000,
+                              hor_velocity=int(speed * 100), ver_velocity=0, flags=0x1FF, squawk=1200,
+                              altitude_type=0, callsign=list(call.ljust(9, b"\0")), emitter_type=1, tslc=1)
             if n == 30:
                 self.send(253, severity=6, text=list(b"ArduCopter V4.7.3 (fake for CI)".ljust(50, b"\0")))
             if n % 300 == 20 and not self.armed:  # like ArduPilot: repeat PreArm failures every 30 s while disarmed

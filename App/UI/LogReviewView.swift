@@ -329,7 +329,15 @@ struct LogReviewPicker: View {
                     Button { refresh() } label: { Image(systemName: "arrow.clockwise") }
                 }
             }
-            .onAppear { refresh() }
+            .onAppear {
+                refresh()
+                // Test automation only: -MPOpenLogReview YES opens the first log.
+                if UserDefaults.standard.bool(forKey: "MPOpenLogReview") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                        if path.isEmpty, let first = files.first { path.append(first) }
+                    }
+                }
+            }
             .fileImporter(isPresented: $importing,
                           allowedContentTypes: [UTType(filenameExtension: "bin") ?? UTType.data, UTType.data]) { result in
                 if case .success(let u) = result { path.append(u) }

@@ -159,7 +159,8 @@ struct StatusBar: View {
         .background(.bar)
         .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
         .onAppear {
-            if UserDefaults.standard.bool(forKey: "MPShowDiagnostics") {
+            if UserDefaults.standard.bool(forKey: "MPShowDiagnostics")
+                || UserDefaults.standard.bool(forKey: "MPShowInspector") {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 6) { showDiagnostics = true }
             }
         }

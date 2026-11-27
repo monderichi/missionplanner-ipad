@@ -12,6 +12,7 @@ struct DiagnosticsView: View {
     @EnvironmentObject var params: ParameterStore
     @Environment(\.dismiss) private var dismiss
     @State private var logs: [URL] = []
+    @State private var openInspector = false
 
     static var appVersion: String {
         let info = Bundle.main.infoDictionary ?? [:]
@@ -90,7 +91,14 @@ struct DiagnosticsView: View {
             .navigationTitle("Diagnostics")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .onAppear { logs = DocumentsStore.shared.tlogFiles() }
+            .navigationDestination(isPresented: $openInspector) { InspectorView() }
+            .onAppear {
+                logs = DocumentsStore.shared.tlogFiles()
+                // Test automation only: -MPShowInspector YES pushes the MAVLink Inspector.
+                if UserDefaults.standard.bool(forKey: "MPShowInspector") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { openInspector = true }
+                }
+            }
         }
     }
 }
