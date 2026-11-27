@@ -159,6 +159,16 @@ tried on the iPad: the map editing, calibrations, motor test and replay need a r
   chunk, LOG_REQUEST_END) with `LogTests`.
 - Not feasible on a sideloaded iPad: firmware flashing, ESC calibration (power cycle), joystick, MP scripts.
 
+## Tester round (2026-11-27)
+
+- Build 0.4.0 (`b9a0151`): Diagnostics screen (ⓘ: version + CI build number + commit, heartbeat sources, message
+  counts, share report and latest .tlog). CI stamps `CFBundleVersion` = run number and `GitCommit` = SHA, and skips
+  docs-only pushes.
+- Test plan: `TESTING.md`. Feedback page: https://claude.ai/artifact/AJkcibTj4zuqpb5RpnXpPr. Each tester writes
+  `feedback/<their user id>` = {build, ipad, link, vehicle, general, results: {A1: {s: pass|part|fail|skip, n: note}},
+  updatedAt}. Read them with ArtifactData `list` collection `feedback` (owner/editors read all, testers only their own).
+- Next: collect results; analyse any shared iPad .tlog (B2 = the HUD over ELRS) and fix failures.
+
 ## Backlog after the ELRS link works
 
 Phases 4–7 from `CLAUDE_PROMPTS.md`: map upgrades (trail, offline tiles), the mission editor

@@ -1,4 +1,4 @@
-﻿# Mission Planner for iPad: test plan
+# Mission Planner for iPad: test plan
 
 Thank you for testing. The app is a native iPad ground station for ArduPilot, modelled on desktop
 Mission Planner. It has been compiled and unit-tested on GitHub's Mac, but **it has not yet been used
@@ -28,7 +28,8 @@ also attach the diagnostics report and the telemetry log (see "How to send feedb
 
 1. In the app, tap **â“˜** (top bar) â€º **Share diagnostics report** and **Share latest telemetry log**.
    Send both by email, AirDrop or a cloud drive.
-2. Fill in the online feedback form you were sent (one row per test ID), or reply with a list
+2. Fill in the online feedback page, https://claude.ai/artifact/AJkcibTj4zuqpb5RpnXpPr (the developer shares it
+   with you; your answers save automatically), or reply with a list
    like `B3 Fail: HUD frozen, orange banner shown`.
 3. Screenshots help a lot: on iPad, press the top button and volume-up together.
 
