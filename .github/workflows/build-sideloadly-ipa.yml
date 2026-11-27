@@ -2,6 +2,7 @@ name: Build Sideloadly IPA
 
 on:
   push:
+    branches: [main]
     paths-ignore: ['**.md', 'docs/**']   # docs-only pushes don't need a macOS build
   pull_request:
     paths-ignore: ['**.md', 'docs/**']
@@ -39,4 +40,43 @@ jobs:
         with:
           name: xcodebuild-log
           path: build/xcodebuild.log
+          if-no-files-found: ignore
+
+  # Runs the real app in the iPad Simulator against tools/fake_vehicle.py and publishes screenshots
+  # to the ci-screenshots branch. Only on manual runs or commits whose message contains [sim].
+  simulator:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[sim]')
+    runs-on: macos-15
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build, run in iPad Simulator, take screenshots
+        run: bash scripts/sim_screenshots.sh
+
+      - name: Publish screenshots to the ci-screenshots branch
+        if: always()
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [ -d build/sim ] || exit 0
+          cd build/sim
+          echo "Commit ${GITHUB_SHA::7}, run ${GITHUB_RUN_NUMBER}" > SOURCE.txt
+          git init -q
+          git checkout -q -b ci-screenshots
+          git add -A
+          git -c user.name="ci" -c user.email="ci@localhost" commit -qm "Simulator screenshots for ${GITHUB_SHA::7} (run ${GITHUB_RUN_NUMBER})"
+          git push -qf "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-screenshots
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-screenshots
+          path: build/sim
           if-no-files-found: ignore

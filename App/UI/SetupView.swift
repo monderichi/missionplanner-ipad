@@ -66,7 +66,7 @@ enum SetupPage: String, CaseIterable, Identifiable {
 struct SetupView: View {
     @EnvironmentObject var vehicle: VehicleModel
     @EnvironmentObject var commands: CommandCenter
-    @State private var page = SetupPage.prearm
+    @State private var page = SetupPage.allCases.first { "\($0)" == UserDefaults.standard.string(forKey: "MPSetupPage") } ?? .prearm
 
     var body: some View {
         HStack(spacing: 0) {

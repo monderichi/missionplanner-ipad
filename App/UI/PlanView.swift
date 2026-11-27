@@ -109,6 +109,14 @@ struct PlanView: View {
         .alert(alert ?? "", isPresented: Binding(get: { alert != nil }, set: { if !$0 { alert = nil } })) {
             Button("OK", role: .cancel) {}
         }
+        .task {
+            // Test automation: -MPReadMission YES reads the mission once the vehicle is attached.
+            guard UserDefaults.standard.bool(forKey: "MPReadMission") else { return }
+            for _ in 0..<30 {
+                if mission.isAttached { mission.read(.mission); break }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
         .confirmationDialog("Clear \(target.rawValue.lowercased())?", isPresented: $confirmClear, titleVisibility: .visible) {
             Button("Clear", role: .destructive) {
                 if let t = target.missionType { mission.clear(t) } else { mission.surveyPolygon = [] }
