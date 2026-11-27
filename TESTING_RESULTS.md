@@ -111,6 +111,7 @@ testing/sim/sim.sh boot "iPad Pro 13-inch (M4)"
 testing/sim/sim.sh run
 testing/sim/sim.sh shot <name>
 testing/sim/sim.sh stop
+testing/sim/sim.sh uitest            # XCUITest repros (testing/sim/UITests) with a self-restarting fake drone
 ```
 
 The harness writes app files to `testing/.build/home/Documents` (via `CFFIXED_USER_HOME`) and passes
@@ -622,7 +623,9 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
 
 - **Everything that needs the iPad Simulator / XCUITest** (A1, A2, D4, D6, E1, E2, F1, view layout, rotation,
   backgrounding, memory warnings, gestures, on-screen banners, screenshots): the test Mac has no Xcode, only the Command
-  Line Tools. `testing/sim/sim.sh` is written but has **not** been run. No screenshots or videos exist in
+  Line Tools. `testing/sim/sim.sh` and the XCUITest suite `testing/sim/UITests/BreakTestUITests.swift` (12 tests: A1/B1, B5, BUG-001,
+  -003, -004, -005, -006, -008, -013, background/foreground, rotation; built from the test-only spec `testing/sim/project.yml`)
+  are written but have **not** been run. No screenshots or videos exist in
   `testing/artifacts/` for the same reason. To finish: install Xcode + an iOS runtime, `brew install xcodegen`, then run
   the simulator repro lines in BUG-001, -003, -004, -005, -006, -007, -012, -013, -018, -022.
 - **ArduCopter SITL**: `testing/sitl/build_sitl.sh` (Copter-4.7.3) and the `sitl_smoke`, `sitl_params`, `sitl_arm` scenarios
