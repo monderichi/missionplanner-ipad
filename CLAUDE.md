@@ -1,6 +1,6 @@
 # Agent notes: Mission Planner for iPad
 
-Read `README.md` (what works, build, install) and `CLAUDE_PROMPTS.md` (the phase 1–7 plan) first.
+Read `PROGRESS.md` (latest snapshot and next steps), `README.md` (what works, build, install) and `CLAUDE_PROMPTS.md` (the phase 1–7 plan) first.
 This file is the running handoff log: what's in flight, what was learned on the bench, and what to
 do next. Update it when you finish a piece of work.
 
