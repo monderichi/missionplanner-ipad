@@ -230,6 +230,8 @@ simulator for the UI part.
 - **Severity** High · **Category** crash, safety · **Verdict** CONFIRMED: **the real app crashes** when the stored value is 1e20 (UI test
   `test_Z4_BUG006_persistedHugeTakeoffAltitude`, launched with `-actions.takeoffAlt 1e20`; EXC_BREAKPOINT in
   `ActionsView.body.getter (ActionsView.swift:169)`)
+- **Also (UI)** Fly-here accepts a negative altitude: `BreakTestUITests2/test_G3_flyHereClickHold` typed −5 m and the app
+  sent the target ("Flying to … at -5 m").
 - **Repro** `testing/scenarios/probe_takeoff_alt_huge.sh`. Simulator: Actions › Guided takeoff › type
   `100000000000000000000`, leave the field.
 - **Expected** Input is clamped/rejected (e.g. 1–500 m) and can never crash.
@@ -245,7 +247,8 @@ simulator for the UI part.
   1e20, NaN, −5 and 0. In the simulator, typing a huge value shows an inline error and no crash after a relaunch.
 
 ### BUG-007: Out-of-range or NaN coordinates crash the app (corrupt `.waypoints` file, waypoint editor typo)
-- **Severity** High · **Category** crash, data · **Verdict** CONFIRMED
+- **Severity** High · **Category** crash, data · **Verdict** CONFIRMED; the editor case **crashes the real UI**
+  (`BreakTestUITests2/test_Z5_BUG007_editorLatitude300`)
 - **Repro** `testing/scenarios/probe_waypoint_file_nan.sh`, `probe_waypoint_file_huge_lat.sh`, `probe_mission_item_nan_coord.sh`,
   `probe_waypoint_editor_lat_300.sh`; unit test `test_BUG007_waypointFileRejectsOutOfRangeLatitude`.
   Simulator: Plan › File › Load a `.waypoints` file whose line 1 has `nan` as latitude; or tap a waypoint and type
@@ -423,8 +426,9 @@ simulator for the UI part.
 - **Accept** `no_ack.sh` PASS.
 
 ### BUG-018: Battery voltage/current calibration accepts any value without bounds or confirmation
-- **Severity** Medium · **Category** safety · **Verdict** CODE
-- **Repro** Simulator: Setup › Battery monitor, with the fake drone at 16.4 V, type measured `1.64` (decimal-point typo) →
+- **Severity** Medium · **Category** safety · **Verdict** CONFIRMED in the real UI (`BreakTestUITests2/test_Z6_BUG018_batteryCalibrationNoConfirm`:
+  measured 1.64 V → Calibrate voltage → applied with no prompt)
+- **Repro** Setup › Battery monitor, with the fake drone at 16.4 V, type measured `1.64` (decimal-point typo) →
   Calibrate: BATT_VOLT_MULT becomes 1/10 of its value and the vehicle then reports 1.6 V (immediate battery failsafe in
   flight). The reverse (164) makes the battery never look low.
 - **Cause** `App/UI/SetupView.swift:754-755` and `:761-762`.
@@ -509,6 +513,34 @@ simulator for the UI part.
   generation check that already drops late callbacks.
 - **Accept** The repro above reports 0 races for `connect_spam`, `replay`, `tcp_drop` and `disconnect_mid_transfer`.
 
+### BUG-036: Integers are shown with the locale's grouping separator: PWM 1500 reads "1.500"
+- **Severity** Medium · **Category** UX, data · **Verdict** CONFIRMED in the real UI (Mac Catalyst, Greek/EU locale)
+- **Repro** `testing/sim/catalyst.sh uitest BreakTestUITests2/test_D4_radioBars` (Setup › Radio calibration).
+- **Expected** PWM values as plain microseconds: `1500`, `1300`.
+- **Actual** `1.500`, `1.300` (screenshot `testing/evidence/catalyst-D4-radio-grouped.jpg`): in "." grouping locales a pilot reads
+  1.5. The same happens for servo outputs, ESC RPM ("9.000 rpm"), the flight-mode "Current PWM" and the parameter group
+  counts. Values ≥ 1000 are affected; most of Europe uses "." or a space as the grouping separator.
+- **Cause** SwiftUI `Text("…\(intValue)…")` and `Text(cond ? "—" : "\(v)")` build a `LocalizedStringKey`, whose
+  interpolation formats integers with grouping: `App/UI/SetupView.swift:342` (RC), `:438` (flight-mode PWM),
+  `App/UI/FlightDataTabs.swift:133` (servo out), `:190` (ESC rpm), `App/UI/ParametersView.swift:187` (counts).
+- **Fix** For machine values use `Text(verbatim: "\(v)")` or `Text(String(v))` (or `v.formatted(.number.grouping(.never))`).
+  Add a lint/grep check in CI for `Text("\\(` on integer telemetry.
+- **Accept** `test_D4_radioBars` passes (plain `1500`), in a locale with "." grouping (`-AppleLocale el_GR` launch argument).
+
+### BUG-037: The real UI uses ~48 % CPU at high telemetry rates and memory grows under load
+- **Severity** Medium · **Category** performance · **Verdict** CONFIRMED (Mac Catalyst, Apple silicon; an iPad will be slower)
+- **Repro** `testing/sim/catalyst.sh perf BreakTestUITests2/test_perf_highRateAndFlood` (fake drone 50 Hz × 8 streams for
+  60 s, then + 200 STATUSTEXT/s for 60 s; CPU/RSS sampled every 5 s into `testing/logs/catalyst_perf_*.csv`).
+- **Actual** avg **48 % CPU** (one core) at 50 Hz, versus 7 % for the same code headless (so ~85 % of the cost is SwiftUI
+  re-rendering on every packet); RSS **312 → 358 MB in 2 min** under load. Long-session result: see section 7.
+- **Cause** Every decoded packet hops to main and mutates `@Published` properties one by one (`LinkManager.swift:316-338`,
+  `VehicleModel.handle`), so the whole HUD/map/status hierarchy invalidates up to hundreds of times a second;
+  `messages.insert(at: 0)` per STATUSTEXT; per-packet `messageCounts` dictionary publish.
+- **Fix** Coalesce: apply packets to a plain model on the I/O queue and publish a snapshot to the UI at ≤ 10–20 Hz
+  (HUD) / 2 Hz (status lists); keep `messageCounts` unpublished and refresh Diagnostics on a timer; ring buffer for
+  messages. Re-measure with the perf command.
+- **Accept** `perf test_perf_highRateAndFlood` averages < 15 % CPU and RSS growth < 10 MB over the 2 minutes.
+
 ### BUG-023: ExpressLRS backpack answers with port 0 or `enabled:false` are used as-is
 - **Severity** Low · **Category** UX · **Verdict** CONFIRMED (decoder)
 - **Repro** `testing/scenarios/probe_elrs_backpack_json.sh`.
@@ -568,6 +600,22 @@ simulator for the UI part.
 - **Accept** A harness test with the fake drone (RC_CHANNELS rate follows SET_MESSAGE_INTERVAL) captures the full
   1000–2000 range from a 0.5 Hz sweep.
 
+### BUG-035: Accessibility: 165 audit issues (low-contrast captions, icon names read aloud, unlabelled menus)
+- **Severity** Low · **Category** accessibility · **Verdict** CONFIRMED (XCUITest `performAccessibilityAudit`, Mac Catalyst)
+- **Repro** `testing/sim/catalyst.sh uitest BreakTestUITests2/test_a11y_audit` (Data, Plan, Setup, Params screens); the
+  full list is attached to the result bundle as "note-…a11y…".
+- **Actual** 112 contrast failures (top-bar captions in `.secondary` on `.bar`: "TCP 127.0.0.1:5799", "ArduCopter · sys 1",
+  Link button; repeated on every screen), 13 "label not human-readable" in Params (raw names/values only), SF Symbol
+  names read aloud as labels ("battery.75", "exclamationmark.shield", "hand.tap"), the Map and File menus and the
+  altitude-frame picker without a description, 4 "potentially inaccessible text" on Data (HUD Canvas).
+- **Cause** `App/UI/RootView.swift:84-145` (caption colours), Setup sidebar `Label` icons
+  (`App/UI/SetupView.swift:50-61`), `MapToolsMenu`/`File` menus without `accessibilityLabel`, `HUDView` Canvas exposes
+  one label only.
+- **Fix** Use `.foregroundStyle(.primary)`/higher-contrast colours on the bar; `Label(title, systemImage:)` with
+  `.labelStyle` instead of bare images; `.accessibilityLabel` on menus/pickers; expose HUD values and banners as
+  accessibility elements (also needed for TEST-031).
+- **Accept** `test_a11y_audit` reports < 10 issues, none on the top bar.
+
 ### TEST-030: The app layer has no tests, CI runs only MAVLinkKit, and there are no UI tests
 - **Severity** Medium · **Category** test gap
 - **Details** `LinkManager`, `VehicleModel`, the stores and every view are untested. All bugs above except BUG-002/-007/-010/
@@ -621,43 +669,43 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
 | TESTING.md item | How covered | Status |
 |---|---|---|
 | A1 Install, landscape, Connect sheet | Mac Catalyst UI: app launches with the Connect sheet (`test_A1_B1_launchAndConnect`, `testing/evidence/catalyst-A1-connect-sheet.jpg`); Sideloadly install/landscape on iPad N/T | PARTIAL |
-| A2 Diagnostics version/build | UI; build stamp comes from CI (not stamped in a local build) | NOT TESTED |
+| A2 Diagnostics version/build | UI `test_A2_B6_diagnostics` (version shown; CI stamps the build number) | PASS |
 | A3 Documents folders | harness: `DocumentsStore` creates logs/params/missions/tiles | PASS |
 | B1 Connect, firmware/mode/GPS shown | `connect`, `connect_udp_listen`, `connect_udp_connect` | PASS. ELRS kind N/T (Wi-Fi-only + real 10.0.0.1 backpack); backpack JSON → BUG-023 |
 | B2 HUD moves, no NO ATTITUDE banner | `connect` (attitude flowing); Mac Catalyst UI: HUD, tapes and map render live (`catalyst-B1-connected.jpg`) | PASS; NaN/Inf crash → BUG-003 |
 | B3 Values plausible | `connect` vs fake drone truth | PASS |
-| B4 ESC telemetry | `esc_telemetry` (4 ESCs, 0 RPM disarmed, RPM + temperature armed) | PASS |
+| B4 ESC telemetry | `esc_telemetry` (4 ESCs, 0 RPM disarmed, RPM + temperature armed); UI scroll to the section not automatable on Mac | PASS (RPM grouping → BUG-036) |
 | B5 Link drop banner + voice | `link_loss`, `link_loss_udp`, `blackout` PASS; UI: red NO HEARTBEAT shown on silence and cleared after (`test_B5_…`); `tcp_drop` + UI `test_BUG001_…` FAIL; voice N/T | FAIL → BUG-001 (Link % → BUG-016) |
 | B6 Heartbeat sources, message counts | `connect` | PASS |
 | C1 Download all params | `params` (400), `params_1500`, `lossy_link` (30 % loss: 9.5 s); SITL `sitl_params` (1370 in < 1 s), `sitl_lossy` (1370 at 30 % loss in 20 s) | PASS (metadata gap → BUG-034) |
 | C2 Save .param | `param_file_roundtrip`, `sitl_param_file_roundtrip` | PASS |
 | C3 Write + confirm + set back | `param_set`, `sitl_param_set` (MAV1_EXTRA1) | PASS (NaN → BUG-020; `SR6_` in the instructions → BUG-034) |
-| C4 Options/bitmask metadata | `params` (metadata loaded); editor UI N/T | PARTIAL |
+| C4 Options/bitmask metadata | `params`; UI `test_C4_paramEditorListsAndBitmask` (FRAME_CLASS list, ARMING_CHECK checkboxes) | PASS |
 | C5 Load file → 0 differ | `param_file_roundtrip` PASS; NaN case FAIL | FAIL → BUG-020 |
-| D1 Pre-arm checks | `prearm_check`, `sitl_prearm_check` (MAV_CMD_RUN_PREARM_CHECKS accepted), `reject_arm` | PASS (button UI N/T) |
+| D1 Pre-arm checks | `prearm_check`, `sitl_prearm_check`, `reject_arm`; UI `test_D1_prearmButton` | PASS |
 | D2 Accelerometer calibration | `accel_cal` PASS (positions 1–6, success), `accel_cal_fail` PASS; `accel_cal_lossy(_retap)` FAIL; `accelcal_live_nan` CRASH; `sitl_accel_probe` (real position re-requests at 1 Hz) | FAIL → BUG-009, BUG-021 |
 | D3 Compass calibration | `compass_cal` PASS (progress, reports, accept); `compass_cal_fail` FAIL | PASS (UX: BUG-028) |
-| D4 Radio calibration | UI only; code review of the capture/save logic | N/T (no Xcode); BUG-029 |
+| D4 Radio calibration | UI `test_D4_radioBars` (16 channels with bars) | PARTIAL: values grouped → BUG-036; BUG-029 |
 | D5 Flight modes page | `probe_fltmode_ch0`, `param_nan`, UI `test_Z3_BUG005_…` (real crash) | FAIL → BUG-005 |
-| D6 Motor test | `motor_test` (single and sequence MAV_CMD_DO_MOTOR_TEST accepted); props-off toggle + armed guard by code review | PARTIAL (UI N/T) |
-| D7 Geofence altitude | `geofence_apply` (page's writes: FENCE_ALT_MAX 60, ENABLE 1, TYPE bit 0) | PASS |
-| D8 Battery monitor calibration | code review | FAIL → BUG-018 |
+| D6 Motor test | `motor_test`; UI `test_D6_motorTestLockouts` (buttons disabled until "props removed", then accepted) | PASS |
+| D7 Geofence altitude | `geofence_apply`; UI `test_D7_fencePage` | PASS (in-flight → BUG-022) |
+| D8 Battery monitor calibration | UI `test_Z6_BUG018_…` | FAIL → BUG-018 |
 | D9 DataFlash list/download | `log_download`; `sitl_log_download` (3 logs listed, 3 MB downloaded at ~100 kB/s, size matches) | PASS (memory: BUG-019) |
-| E1 Offline map download | MapKit/UIKit + internet tile servers | N/T |
+| E1 Offline map download | UI `test_E1_offlineMapsTinyArea`: sheet, radius slider and tile estimate; no download (Esri terms) | PARTIAL |
 | E2 Offline imagery | as E1 | N/T |
-| E3 Plan editing | store logic via `fence_rally` add; editor UI N/T | PARTIAL; editor crash → BUG-007 |
+| E3 Plan editing | UI `test_E3_E4_planEditWriteRead` (4 map clicks → 4 waypoints, +Takeoff/+RTL, editor) | PASS; editor crash → BUG-007 |
 | E4 Write/Clear/Read mission | `mission_roundtrip`, `large_mission` (700), `lossy_link`; SITL `sitl_mission_roundtrip` PASS; SITL lossy uploads FAIL | FAIL → BUG-033 |
-| E5 Save .waypoints | `mission_roundtrip` (save + parse); desktop MP check N/T | PASS; corrupt file → BUG-007, huge → BUG-010 |
-| E6 Survey grid | existing unit tests + `probe_survey_*` | PARTIAL; huge → BUG-010 |
-| E7 Fence + rally round trip | `fence_rally`, `sitl_fence_rally` | PASS |
-| F1 Checklist | UI only | N/T (no Xcode) |
+| E5 Save .waypoints | `mission_roundtrip` (save + parse); UI `test_E5_saveWaypointsFile` (File › Save writes the file); desktop MP check N/T | PASS; corrupt file → BUG-007, huge → BUG-010 |
+| E6 Survey grid | UI `test_E6_surveyGrid` (outline 4 corners → grid appended); `probe_survey_*` | PASS; huge → BUG-010 |
+| E7 Fence + rally round trip | `fence_rally`, `sitl_fence_rally`; UI `test_E7_fenceAndRally` | PASS |
+| F1 Checklist | UI `test_F1_checklist` | PASS |
 | F2 Quick mode + banner | `mode_change`, `sitl_mode_change` PASS (incl. 3-tap spam); `no_ack` FAIL | FAIL → BUG-017 |
 | F3 Arm/disarm + refusal | `arm_disarm`, `reject_arm`, `sitl_arm` (arms in GUIDED; in-flight disarm refused and explained) PASS; confirmation dialogs present (code) | PASS (lossy-link caveat: BUG-002) |
-| F4 Servo override, motors greyed | `servo_before_params` FAIL; `sitl_arm` shows ArduPilot refuses motor-output overrides | FAIL → BUG-014 (defence in depth) |
-| F5 Replay, play/pause, seek, speed | `replay` (+ garbage/empty files) | PASS (BUG-026) |
+| F4 Servo override, motors greyed | UI `test_F4_servoMotorOutputsGreyed` PASS (after params); `servo_before_params` FAIL; SITL refuses motor overrides | FAIL → BUG-014 (defence in depth) |
+| F5 Replay, play/pause, seek, speed | `replay` (+ garbage/empty files); UI `test_F5_replayBar` | PASS (BUG-026) |
 | G1 Manual flight, trail | simulated in `auto_mission` (trail drawn) | PARTIAL (no real flight) |
 | G2 Auto mission, current WP | `auto_mission` (fake), `sitl_auto` (real ArduCopter: AUTO, waypoints reached, RTL, land, disarm) | PASS (simulated) |
-| G3 Fly here | `fly_here` (vehicle flies there; rejection mis-reported) | FAIL → BUG-011 |
+| G3 Fly here | `fly_here`; UI `test_G3_flyHereClickHold` (click-and-hold prompt works; −5 m accepted) | FAIL → BUG-011, BUG-006 |
 | G4 Altitude fence breach | `fence_breach` (fake), `sitl_fence` (real: "Max Alt fence breached" → RTL) | PASS (simulated); applying in flight → BUG-022 |
 | G5 Share report + log | tlog recorded (`connect`); share sheet N/T | PARTIAL |
 
@@ -688,6 +736,9 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
 | Memory errors (AddressSanitizer) | `HARNESS_SANITIZE=address`: connect, connect_spam, replay, malformed, lossy_link_corrupt, log_download, fuzz | PASS (no reports) |
 | Mission protocol edge cases | `mission_no_space` (MISSION_ACK NO_SPACE → "No space (too many items)"), `mission_oob` (request beyond count → upload aborted with "Vehicle asked for item 16 of 11") | PASS (aborting is acceptable; the `mission_oob` check expects "accepted" and so reports FAIL by design) |
 | Parameter edge cases | `param_16char` (16-char name, no NUL: decoded and writable), `param_count_change` (inconsistent total → "10 missing. Tap Refresh") | PASS (the FAIL in `param_count_change` comes from the fake's inconsistent count; the app's handling is correct) |
+| Accessibility audit (UI) | `test_a11y_audit` on Data/Plan/Setup/Params | FAIL → BUG-035 (165 issues) |
+| Light/dark appearance (UI) | `test_appearance_lightAndDark`: dark mode readable (`catalyst-appearance-dark-data.jpg`); the `-AppleInterfaceStyle Light` argument did not override the Mac's dark mode, so light mode was **not** rendered | PARTIAL (light N/T) |
+| UI performance (real SwiftUI) | `catalyst.sh perf test_perf_highRateAndFlood`, `test_perf_longSession` (30 min) | FAIL → BUG-037 |
 | Existing tests | `testing/unit/run_unit_tests.sh` | PASS 34/34 |
 
 ---
@@ -737,3 +788,7 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
   (MKMapView setCenterCoordinate, MapCanvas.swift:139), BUG-005 (SetupView.swift:438), BUG-006 (ActionsView.swift:169);
   BUG-001, -012, -013 confirmed on screen; BUG-008 corrected (the Quick tile turns red below 20 %); BUG-016 extended (Link %
   stays 100 % while the link is dead). Screenshots: `testing/evidence/`.
+- Round 3, Mac Catalyst UI (22 tests in `BreakTestUITests2`): PASS for E3/E4, E5, E6, E7, D1, D6, D7, C4, F1, F4, F5, A2/B6,
+  E1 (sheet only), a11y collection, dark mode (light mode could not be forced); FAIL/CRASH confirming BUG-006/-011 (fly-here −5 m), BUG-007 (editor crash),
+  BUG-018 (no confirmation); new BUG-035 (165 accessibility issues), BUG-036 (locale-grouped PWM "1.500"), BUG-037 (48 % CPU
+  at 50 Hz, memory growth). B4 in the UI not automatable on Mac (list scrolling).

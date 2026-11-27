@@ -191,6 +191,10 @@ class Drone:
         log(f"STATUSTEXT {sev} {text}")
 
     # ---------------- periodic output ----------------
+    def rate(self, name):
+        """Stream rate in Hz; the high_rate fault (switchable at runtime) forces 50 Hz for every stream."""
+        return 50 if "high_rate" in self.faults else self.rates.get(name, 0)
+
     def due(self, name, hz, now):
         if hz <= 0:
             return False
@@ -217,7 +221,7 @@ class Drone:
                           target_system=255, target_component=190)
         if "hb_only" in f:
             return
-        if self.due("ATTITUDE", self.rates.get("ATTITUDE", 0), now):
+        if self.due("ATTITUDE", self.rate("ATTITUDE"), now):
             r, p, y = 0.05 * math.sin(now), 0.03 * math.cos(now), math.atan2(self.ve, self.vn) if self.ve or self.vn else 1.0
             if "nan_attitude" in f:
                 r = p = y = float("nan")
@@ -227,7 +231,7 @@ class Drone:
                 r, p, y = 3e38, -3e38, 1e30
             self.send("ATTITUDE", time_boot_ms=int((now - T0) * 1000) & 0xFFFFFFFF, roll=r, pitch=p, yaw=y,
                       rollspeed=0, pitchspeed=0, yawspeed=0)
-        if self.due("VFR_HUD", self.rates.get("VFR_HUD", 0), now):
+        if self.due("VFR_HUD", self.rate("VFR_HUD"), now):
             gs = math.hypot(self.vn, self.ve)
             alt = self.home[2] + self.alt
             climb = self.vz
@@ -237,7 +241,7 @@ class Drone:
                 gs, alt, climb = 3e38, 3e38, -3e38
             self.send("VFR_HUD", airspeed=gs, groundspeed=gs, heading=90, throttle=50 if self.armed else 0, alt=alt,
                       climb=climb)
-        if self.due("GLOBAL_POSITION_INT", self.rates.get("GLOBAL_POSITION_INT", 0), now):
+        if self.due("GLOBAL_POSITION_INT", self.rate("GLOBAL_POSITION_INT"), now):
             lat, lon = int(self.lat * 1e7), int(self.lon * 1e7)
             if "bad_latlon" in f:
                 lat, lon = 2_000_000_000, 2_100_000_000  # 200°, 210°: outside valid ranges
@@ -249,11 +253,11 @@ class Drone:
             self.send("GLOBAL_POSITION_INT", time_boot_ms=int((now - T0) * 1000) & 0xFFFFFFFF, lat=lat, lon=lon,
                       alt=int((self.home[2] + self.alt) * 1000), relative_alt=ralt, vx=int(self.vn * 100),
                       vy=int(self.ve * 100), vz=int(-self.vz * 100), hdg=9000)
-        if self.due("GPS_RAW_INT", self.rates.get("GPS_RAW_INT", 0), now):
+        if self.due("GPS_RAW_INT", self.rate("GPS_RAW_INT"), now):
             fix, sats, eph = (0, 0, 65535) if "gps_loss" in f else (3, 12, 80)
             self.send("GPS_RAW_INT", lat=int(self.lat * 1e7), lon=int(self.lon * 1e7), fix_type=fix,
                       satellites_visible=sats, eph=eph, epv=120, alt=int((self.home[2] + self.alt) * 1000))
-        if self.due("SYS_STATUS", self.rates.get("SYS_STATUS", 0), now):
+        if self.due("SYS_STATUS", self.rate("SYS_STATUS"), now):
             v = self.battery
             rem = max(0, min(100, int((v - 13.2) / (16.8 - 13.2) * 100)))
             if "battery_low" in f:
@@ -265,7 +269,7 @@ class Drone:
                       onboard_control_sensors_health=sensors & ~(0x20 if "gps_loss" in f else 0),
                       voltage_battery=int(v * 1000), current_battery=1500 if self.armed else 50, battery_remaining=rem,
                       load=300)
-        if self.due("RC_CHANNELS", self.rates.get("RC_CHANNELS", 0), now):
+        if self.due("RC_CHANNELS", self.rate("RC_CHANNELS"), now):
             ch = [1500] * 18
             ch[4] = 1300  # mode switch position 2
             self.send("RC_CHANNELS", chancount=16, **{f"chan{i + 1}_raw": ch[i] for i in range(18)}, rssi=200)
@@ -291,7 +295,7 @@ class Drone:
                     log(f"MAG_CAL_REPORT compass {cid} {'success' if ok else 'FAILED'}")
             if len(self.magcal["done"]) == 2:
                 self.magcal = None
-        if self.due("MISSION_CURRENT", self.rates.get("MISSION_CURRENT", 0), now):
+        if self.due("MISSION_CURRENT", self.rate("MISSION_CURRENT"), now):
             self.send("MISSION_CURRENT", seq=self.cur_wp)
         if "statustext_flood" in f and self.due("FLOOD", 10, now):  # 200 STATUSTEXT/s
             for k in range(20):

@@ -15,6 +15,9 @@ BID=io.github.missionplannerpad.breaktest
 mkdir -p "$PRJ" "$LOGS" "$ART" "$HOMEDIR/Documents"
 DEST='platform=macOS,variant=Mac Catalyst'
 gen() { xcodegen generate --quiet --spec "$ROOT/testing/sim/project-catalyst.yml" --project "$PRJ"; }
+# test selector: "" = all, "Class" (BreakTestUITests2), "Class/test", or a bare test name in BreakTestUITests
+sel() { case "$1" in "") ;; BreakTestUITests*/*) echo "-only-testing:BreakTestUITests/$1" ;;
+        BreakTestUITests*) echo "-only-testing:BreakTestUITests/$1" ;; *) echo "-only-testing:BreakTestUITests/BreakTestUITests/$1" ;; esac; }
 app() { find "$DD" -path '*maccatalyst*' -name MissionPlannerPad.app -maxdepth 5 | head -1; }
 case "${1:-}" in
   build)
@@ -29,12 +32,13 @@ case "${1:-}" in
       -link.kind TCP -link.host 127.0.0.1 -link.port 5799 -speech.enabled '<false/>' "$@" > "$LOGS/catalyst_app.log" 2>&1 &
     echo "pid $!" ;;
   uitest)
+    killall "Problem Reporter" 2>/dev/null || true   # close "quit unexpectedly" dialogs left by deliberate crash tests
     ( while true; do python3 "$ROOT/testing/fake_drone/fake_drone.py" --tcp-server 5799 >> "$LOGS/catalyst_drone.log" 2>&1; sleep 2; done ) &
     LOOP=$!; trap 'kill $LOOP 2>/dev/null; pkill -f "fake_drone.py --tcp-server 5799" || true' EXIT
     RB="$ROOT/testing/.build/catalyst_uitest.xcresult"; rm -rf "$RB"
     set +e
-    TEST_RUNNER_BREAKTEST_HOME="$HOMEDIR" xcodebuild -project "$PRJ/MissionPlannerPadCatalyst.xcodeproj" -scheme BreakTestCatalyst -destination "$DEST" \
-      -derivedDataPath "$DD" -resultBundlePath "$RB" ${2:+-only-testing:BreakTestUITests/BreakTestUITests/$2} \
+    TEST_RUNNER_BREAKTEST_LONG_MIN="${BREAKTEST_LONG_MIN:-30}" TEST_RUNNER_BREAKTEST_HOME="$HOMEDIR" xcodebuild -project "$PRJ/MissionPlannerPadCatalyst.xcodeproj" -scheme BreakTestCatalyst -destination "$DEST" \
+      -derivedDataPath "$DD" -resultBundlePath "$RB" $(sel "${2:-}") \
       test-without-building > "$LOGS/catalyst_uitest.log" 2>&1; rc=$?
     set -e
     grep -E "Test Case .*(passed|failed)|error: -\[|Fatal error|crashed" "$LOGS/catalyst_uitest.log" | sed 's/^.*Test Case/Test Case/' | head -60
@@ -49,6 +53,17 @@ for t in json.load(open(os.path.join(d, "manifest.json"))):
         os.replace(os.path.join(d, a["exportedFileName"]), os.path.join(d, n))
 PY
     ls "$ART" | grep -v manifest | head -40
+    exit $rc ;;
+  perf)  # perf TEST [interval_s]: run a UI test while sampling the app's CPU % and RSS into testing/logs/catalyst_perf_<TEST>.csv
+    T="${2:?test name}"; IV="${3:-5}"; CSV="$LOGS/catalyst_perf_${T##*/}.csv"; echo "t_s,cpu_pct,rss_mb" > "$CSV"
+    ( t0=$(date +%s); while true; do
+        pid=$(pgrep -f "MissionPlannerPad.app/Contents/MacOS/MissionPlannerPad" | head -1 || true)
+        [[ -n "$pid" ]] && ps -o %cpu=,rss= -p "$pid" | awk -v t=$(( $(date +%s) - t0 )) '{printf "%d,%.1f,%.1f\n", t, $1, $2/1024}' >> "$CSV"
+        sleep "$IV"; done ) &
+    SAMPLER=$!
+    "$0" uitest "$T"; rc=$?
+    kill $SAMPLER 2>/dev/null
+    awk -F, 'NR>1 && $3>0 {n++; c+=$2; if ($3>m) m=$3; if (!f) f=$3; l=$3} END {if (n) printf "samples=%d avg_cpu=%.0f%% rss_first=%.0fMB rss_last=%.0fMB rss_max=%.0fMB\n", n, c/n, f, l, m}' "$CSV"
     exit $rc ;;
   clean)
     rm -rf "$DD" "$PRJ" "$HOMEDIR" "$ROOT/testing/.build/catalyst_uitest.xcresult"
