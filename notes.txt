@@ -1,0 +1,73 @@
+Simulator: iPad Pro 13-inch (M5) (E90749F9-1A49-4D08-B760-75F104D88418)
+== 01-connect-sheet: 
+io.github.missionplannerpad.app: 7023
+== 02-data-quick: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPTab quick
+io.github.missionplannerpad.app: 7985
+== 03-data-actions: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPTab actions
+io.github.missionplannerpad.app: 9049
+== 04-data-status: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPTab status
+io.github.missionplannerpad.app: 9749
+== 05-data-checklist: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPTab checklist
+io.github.missionplannerpad.app: 10398
+== 06-data-servo: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPTab servo
+io.github.missionplannerpad.app: 10942
+== 07-plan-mission: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen plan -MPReadMission YES
+io.github.missionplannerpad.app: 11219
+== 08-setup-prearm: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen setup -MPSetupPage prearm
+io.github.missionplannerpad.app: 12324
+== 09-setup-fence: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen setup -MPSetupPage fence
+io.github.missionplannerpad.app: 13068
+== 10-setup-modes: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen setup -MPSetupPage modes
+io.github.missionplannerpad.app: 14075
+== 11-setup-battery: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen setup -MPSetupPage battery
+io.github.missionplannerpad.app: 14878
+== 12-params: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen params
+io.github.missionplannerpad.app: 15499
+== 13-diagnostics: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPShowDiagnostics YES
+io.github.missionplannerpad.app: 16478
+== 14-data-messages: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPTab messages
+io.github.missionplannerpad.app: 17127
+== 15-data-graph: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPTab graph
+io.github.missionplannerpad.app: 17801
+== 16-map-adsb: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPTab quick
+io.github.missionplannerpad.app: 19226
+== 17-setup-servo: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen setup -MPSetupPage servo
+io.github.missionplannerpad.app: 20464
+== 18-setup-othercal: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen setup -MPSetupPage othercal
+io.github.missionplannerpad.app: 21184
+== 19-setup-compass: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen setup -MPSetupPage compass
+io.github.missionplannerpad.app: 21828
+== 20-setup-planner: -MPScreen setup -MPSetupPage planner
+io.github.missionplannerpad.app: 23078
+== 21-setup-rangefinder: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen setup -MPSetupPage rangefinder
+io.github.missionplannerpad.app: 23497
+== 22-inspector: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPShowInspector YES
+io.github.missionplannerpad.app: 24502
+== 23-log-review: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen setup -MPSetupPage logs -MPOpenLogReview YES
+io.github.missionplannerpad.app: 25184
+== 30-rover-data: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPTab quick
+io.github.missionplannerpad.app: 26677
+== 31-rover-actions: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPTab actions
+io.github.missionplannerpad.app: 27580
+== 32-rover-setup: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen setup -MPSetupPage roversetup
+io.github.missionplannerpad.app: 27930
+== 33-rover-motors: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen setup -MPSetupPage motors
+io.github.missionplannerpad.app: 28834
+== 34-rover-control: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPTab control -manual.useGamepad NO
+io.github.missionplannerpad.app: 29665
+== 40-sub-data: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPTab quick
+io.github.missionplannerpad.app: 30486
+== 41-sub-control: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPTab control -manual.useGamepad NO
+io.github.missionplannerpad.app: 31415
+== 42-sub-setup: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen setup -MPSetupPage subsetup
+io.github.missionplannerpad.app: 32086
+== 43-sub-messages: -MPAutoConnect tcp:127.0.0.1:5760 -MPScreen data -MPTab messages
+io.github.missionplannerpad.app: 33036
+messages the app sent to the fake vehicle: 424
+ 226 APP -> PARAM_REQUEST_READ
+ 147 APP -> REQUEST_DATA_STREAM
+  21 APP -> PARAM_REQUEST_LIST
+  21 APP -> COMMAND_LONG
+   7 APP -> MISSION_REQUEST_INT
+   1 APP -> MISSION_REQUEST_LIST
+   1 APP -> MISSION_ACK

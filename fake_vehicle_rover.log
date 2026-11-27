@@ -1,0 +1,55 @@
+[   0.00] fake ArduCopter listening on tcp 127.0.0.1:5760
+[   5.79] app connected from ('127.0.0.1', 54113)
+[   6.03] APP -> PARAM_REQUEST_LIST {'target_system': 1, 'target_component': 1}
+[   6.09] APP -> COMMAND_LONG {'param1': 242.0, 'param2': 0.0, 'param3': 0.0, 'param4': 0.0, 'param5': 0.0, 'param6': 0.0, 'param7': 0.0, 'command': 512, 'target_system': 1, 'target_component': 1, 'confirmation': 0}
+[   6.09] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 1, 'start_stop': 1}
+[   6.09] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 2, 'start_stop': 1}
+[   6.09] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 3, 'start_stop': 1}
+[   6.09] APP -> REQUEST_DATA_STREAM {'req_message_rate': 3, 'target_system': 1, 'target_component': 1, 'req_stream_id': 6, 'start_stop': 1}
+[   6.09] APP -> REQUEST_DATA_STREAM {'req_message_rate': 10, 'target_system': 1, 'target_component': 1, 'req_stream_id': 10, 'start_stop': 1}
+[   6.09] APP -> REQUEST_DATA_STREAM {'req_message_rate': 10, 'target_system': 1, 'target_component': 1, 'req_stream_id': 11, 'start_stop': 1}
+[   6.09] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 12, 'start_stop': 1}
+[  23.95] app disconnected
+[  26.22] app connected from ('127.0.0.1', 54229)
+[  27.03] APP -> PARAM_REQUEST_LIST {'target_system': 1, 'target_component': 1}
+[  27.05] APP -> COMMAND_LONG {'param1': 242.0, 'param2': 0.0, 'param3': 0.0, 'param4': 0.0, 'param5': 0.0, 'param6': 0.0, 'param7': 0.0, 'command': 512, 'target_system': 1, 'target_component': 1, 'confirmation': 0}
+[  27.05] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 1, 'start_stop': 1}
+[  27.05] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 2, 'start_stop': 1}
+[  27.05] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 3, 'start_stop': 1}
+[  27.05] APP -> REQUEST_DATA_STREAM {'req_message_rate': 3, 'target_system': 1, 'target_component': 1, 'req_stream_id': 6, 'start_stop': 1}
+[  27.05] APP -> REQUEST_DATA_STREAM {'req_message_rate': 10, 'target_system': 1, 'target_component': 1, 'req_stream_id': 10, 'start_stop': 1}
+[  27.05] APP -> REQUEST_DATA_STREAM {'req_message_rate': 10, 'target_system': 1, 'target_component': 1, 'req_stream_id': 11, 'start_stop': 1}
+[  27.05] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 12, 'start_stop': 1}
+[  39.78] app disconnected
+[  41.80] app connected from ('127.0.0.1', 54313)
+[  42.51] APP -> PARAM_REQUEST_LIST {'target_system': 1, 'target_component': 1}
+[  42.51] APP -> COMMAND_LONG {'param1': 242.0, 'param2': 0.0, 'param3': 0.0, 'param4': 0.0, 'param5': 0.0, 'param6': 0.0, 'param7': 0.0, 'command': 512, 'target_system': 1, 'target_component': 1, 'confirmation': 0}
+[  42.51] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 1, 'start_stop': 1}
+[  42.51] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 2, 'start_stop': 1}
+[  42.51] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 3, 'start_stop': 1}
+[  42.51] APP -> REQUEST_DATA_STREAM {'req_message_rate': 3, 'target_system': 1, 'target_component': 1, 'req_stream_id': 6, 'start_stop': 1}
+[  42.51] APP -> REQUEST_DATA_STREAM {'req_message_rate': 10, 'target_system': 1, 'target_component': 1, 'req_stream_id': 10, 'start_stop': 1}
+[  42.51] APP -> REQUEST_DATA_STREAM {'req_message_rate': 10, 'target_system': 1, 'target_component': 1, 'req_stream_id': 11, 'start_stop': 1}
+[  42.51] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 12, 'start_stop': 1}
+[  60.50] app disconnected
+[  62.09] app connected from ('127.0.0.1', 54449)
+[  62.54] APP -> PARAM_REQUEST_LIST {'target_system': 1, 'target_component': 1}
+[  62.55] APP -> COMMAND_LONG {'param1': 242.0, 'param2': 0.0, 'param3': 0.0, 'param4': 0.0, 'param5': 0.0, 'param6': 0.0, 'param7': 0.0, 'command': 512, 'target_system': 1, 'target_component': 1, 'confirmation': 0}
+[  62.55] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 1, 'start_stop': 1}
+[  62.55] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 2, 'start_stop': 1}
+[  62.55] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 3, 'start_stop': 1}
+[  62.55] APP -> REQUEST_DATA_STREAM {'req_message_rate': 3, 'target_system': 1, 'target_component': 1, 'req_stream_id': 6, 'start_stop': 1}
+[  62.55] APP -> REQUEST_DATA_STREAM {'req_message_rate': 10, 'target_system': 1, 'target_component': 1, 'req_stream_id': 10, 'start_stop': 1}
+[  62.55] APP -> REQUEST_DATA_STREAM {'req_message_rate': 10, 'target_system': 1, 'target_component': 1, 'req_stream_id': 11, 'start_stop': 1}
+[  62.55] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 12, 'start_stop': 1}
+[  82.35] app disconnected
+[  84.40] app connected from ('127.0.0.1', 54819)
+[  85.77] APP -> PARAM_REQUEST_LIST {'target_system': 1, 'target_component': 1}
+[  85.77] APP -> COMMAND_LONG {'param1': 242.0, 'param2': 0.0, 'param3': 0.0, 'param4': 0.0, 'param5': 0.0, 'param6': 0.0, 'param7': 0.0, 'command': 512, 'target_system': 1, 'target_component': 1, 'confirmation': 0}
+[  85.77] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 1, 'start_stop': 1}
+[  85.77] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 2, 'start_stop': 1}
+[  85.77] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 3, 'start_stop': 1}
+[  85.77] APP -> REQUEST_DATA_STREAM {'req_message_rate': 3, 'target_system': 1, 'target_component': 1, 'req_stream_id': 6, 'start_stop': 1}
+[  85.77] APP -> REQUEST_DATA_STREAM {'req_message_rate': 10, 'target_system': 1, 'target_component': 1, 'req_stream_id': 10, 'start_stop': 1}
+[  85.77] APP -> REQUEST_DATA_STREAM {'req_message_rate': 10, 'target_system': 1, 'target_component': 1, 'req_stream_id': 11, 'start_stop': 1}
+[  85.77] APP -> REQUEST_DATA_STREAM {'req_message_rate': 2, 'target_system': 1, 'target_component': 1, 'req_stream_id': 12, 'start_stop': 1}
