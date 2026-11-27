@@ -18,6 +18,10 @@ struct HUDView: View {
     var linkAlive: Bool
     /// Heartbeats arrive but ATTITUDE doesn't: the horizon would be frozen, so say so.
     var attitudeStale: Bool = false
+    /// ArduSub: the right box shows depth (positive down) instead of altitude.
+    var isSub: Bool = false
+    var depth: Double = 0
+    var leakDetected: Bool = false
 
     // computed (not stored) so they don't make the memberwise init private
     private var sky: Color { Color(red: 0.20, green: 0.45, blue: 0.85) }
@@ -119,9 +123,9 @@ struct HUDView: View {
                      at: CGPoint(x: leftBox.midX, y: leftBox.midY - 6))
             ctx.draw(Text("GS m/s  AS \(String(format: "%.1f", airspeed))").font(.system(size: 8)).foregroundColor(.white.opacity(0.8)),
                      at: CGPoint(x: leftBox.midX, y: leftBox.maxY - 8))
-            ctx.draw(Text(String(format: "%.1f", altitude)).font(.system(size: 18, weight: .bold).monospacedDigit()).foregroundColor(.white),
+            ctx.draw(Text(String(format: "%.1f", isSub ? depth : altitude)).font(.system(size: 18, weight: .bold).monospacedDigit()).foregroundColor(.white),
                      at: CGPoint(x: rightBox.midX, y: rightBox.midY - 6))
-            ctx.draw(Text("ALT m  VS \(String(format: "%+.1f", climbRate))").font(.system(size: 8)).foregroundColor(.white.opacity(0.8)),
+            ctx.draw(Text("\(isSub ? "DEPTH" : "ALT") m  VS \(String(format: "%+.1f", climbRate))").font(.system(size: 8)).foregroundColor(.white.opacity(0.8)),
                      at: CGPoint(x: rightBox.midX, y: rightBox.maxY - 8))
 
             // armed / mode
@@ -134,6 +138,13 @@ struct HUDView: View {
                 let banner = CGRect(x: w * 0.15, y: cy - 50 - 30, width: w * 0.7, height: 30)
                 ctx.fill(Path(roundedRect: banner, cornerRadius: 6), with: .color(.orange.opacity(0.9)))
                 ctx.draw(Text("NO ATTITUDE DATA · re-requesting").font(.system(size: 14, weight: .heavy)).foregroundColor(.black),
+                         at: CGPoint(x: banner.midX, y: banner.midY))
+            }
+
+            if leakDetected {
+                let banner = CGRect(x: w * 0.15, y: cy + 56, width: w * 0.7, height: 32)
+                ctx.fill(Path(roundedRect: banner, cornerRadius: 6), with: .color(.red))
+                ctx.draw(Text("LEAK DETECTED").font(.system(size: 18, weight: .heavy)).foregroundColor(.white),
                          at: CGPoint(x: banner.midX, y: banner.midY))
             }
 

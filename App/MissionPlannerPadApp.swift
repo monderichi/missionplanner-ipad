@@ -22,6 +22,7 @@ struct MissionPlannerPadApp: App {
                 .environmentObject(link.logs)
                 .environmentObject(link.history)
                 .environmentObject(link.inspector)
+                .environmentObject(link.manual)
         }
     }
 }

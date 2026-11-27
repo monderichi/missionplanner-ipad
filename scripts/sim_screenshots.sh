@@ -89,6 +89,27 @@ DATA=$(xcrun simctl get_app_container "$UDID" "$BID" data 2>/dev/null || true)
 mkdir -p "$OUT/tlogs"
 if [ -n "$DATA" ]; then cp "$DATA"/Documents/logs/*.tlog "$OUT/tlogs/" 2>/dev/null || true; fi
 
+# --- UGV (ArduRover) and ROV (ArduSub) passes: restart the fake vehicle as another type ---
+restart_fake() {
+  kill "$FAKE" 2>/dev/null || true
+  sleep 1
+  python3 -I tools/fake_vehicle.py --port 5760 --seconds 900 --type "$1" > "$OUT/fake_vehicle_$1.log" 2>&1 &
+  FAKE=$!
+  sleep 2
+}
+restart_fake rover
+shot 30-rover-data 16 "${C[@]}" -MPScreen data -MPTab quick
+shot 31-rover-actions 10 "${C[@]}" -MPScreen data -MPTab actions
+shot 32-rover-setup 16 "${C[@]}" -MPScreen setup -MPSetupPage roversetup
+shot 33-rover-motors 16 "${C[@]}" -MPScreen setup -MPSetupPage motors
+shot 34-rover-control 12 "${C[@]}" -MPScreen data -MPTab control
+restart_fake sub
+shot 40-sub-data 16 "${C[@]}" -MPScreen data -MPTab quick
+shot 41-sub-control 12 "${C[@]}" -MPScreen data -MPTab control
+shot 42-sub-setup 18 "${C[@]}" -MPScreen setup -MPSetupPage subsetup
+shot 43-sub-messages 12 "${C[@]}" -MPScreen data -MPTab messages
+restart_fake copter
+
 kill "$FAKE" 2>/dev/null || true
 cp ~/Library/Logs/DiagnosticReports/*MissionPlannerPad* "$OUT/" 2>/dev/null || true
 grep -c "APP ->" "$OUT/fake_vehicle.log" | xargs echo "messages the app sent to the fake vehicle:" | tee -a "$OUT/notes.txt"

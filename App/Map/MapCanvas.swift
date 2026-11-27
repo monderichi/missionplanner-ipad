@@ -149,6 +149,33 @@ struct MapCanvas: UIViewRepresentable {
             return img.withRenderingMode(.alwaysOriginal)
         }()
 
+        private static var markerCache: [String: UIImage] = [:]
+
+        /// Marker for the connected vehicle: the red arrow for flying vehicles / subs, an arrow in a circle for a ground rover
+        /// and an arrow with a base line for a boat; all point north in the bitmap, so the heading rotation applies. Pre-rendered, never tinted at draw time.
+        static func vehicleMarker(for vehicleType: UInt8) -> UIImage? {
+            let symbol: String
+            switch MAVType(rawValue: vehicleType) {
+            // Arrow-based symbols that already point north, so the heading is unambiguous (car/ferry
+            // symbols are side views; rotating them to a heading would be a guess).
+            case .some(.groundRover): symbol = "location.north.circle.fill"
+            case .some(.surfaceBoat): symbol = "location.north.line.fill"
+            default: return vehicleImage
+            }
+            if let cached = markerCache[symbol] { return cached }
+            let cfg = UIImage.SymbolConfiguration(pointSize: 30, weight: .bold)
+            guard let sym = UIImage(systemName: symbol, withConfiguration: cfg) else { return vehicleImage }
+            let side = max(sym.size.width, sym.size.height)
+            let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
+            let img = renderer.image { ctx in
+                let red = sym.withTintColor(.systemRed, renderingMode: .alwaysOriginal)
+                ctx.cgContext.translateBy(x: side / 2, y: side / 2)
+                red.draw(in: CGRect(x: -sym.size.width / 2, y: -sym.size.height / 2, width: sym.size.width, height: sym.size.height))
+            }.withRenderingMode(.alwaysOriginal)
+            markerCache[symbol] = img
+            return img
+        }
+
         init(_ parent: MapCanvas) { self.parent = parent }
 
         // MARK: sync
@@ -189,6 +216,8 @@ struct MapCanvas: UIViewRepresentable {
                 vehicleAnnotation.heading = v.yaw
                 if !map.annotations.contains(where: { $0 === vehicleAnnotation }) { map.addAnnotation(vehicleAnnotation) }
                 if let view = map.view(for: vehicleAnnotation) {
+                    let marker = Coordinator.vehicleMarker(for: v.vehicleType)
+                    if view.image !== marker { view.image = marker }
                     view.transform = CGAffineTransform(rotationAngle: CGFloat((v.yaw - map.camera.heading) * .pi / 180))
                 }
                 if !centeredOnce {
@@ -404,7 +433,7 @@ struct MapCanvas: UIViewRepresentable {
                 let id = "vehicle"
                 let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) ?? MKAnnotationView(annotation: a, reuseIdentifier: id)
                 v.annotation = a
-                v.image = Coordinator.vehicleImage
+                v.image = Coordinator.vehicleMarker(for: parent.vehicle.vehicleType)
                 v.layer.shadowColor = UIColor.black.cgColor
                 v.layer.shadowOpacity = 0.8
                 v.layer.shadowRadius = 2

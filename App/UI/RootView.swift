@@ -14,7 +14,7 @@ struct RootView: View {
     @State private var screen = Screen.data
 
     enum Tab: String, CaseIterable, Identifiable {
-        case quick = "Quick", actions = "Actions", checklist = "Checklist", status = "Status", servo = "Servo", graph = "Graph", messages = "Messages"
+        case quick = "Quick", actions = "Actions", checklist = "Checklist", status = "Status", servo = "Servo", control = "Control", graph = "Graph", messages = "Messages"
         var id: String { rawValue }
     }
 
@@ -69,7 +69,8 @@ struct RootView: View {
                                 altitude: vehicle.relativeAltitude, climbRate: vehicle.climbRate,
                                 armed: vehicle.armed, mode: vehicle.modeName,
                                 linkAlive: vehicle.heartbeatAlive || !link.state.isActive,
-                                attitudeStale: vehicle.attitudeStale)
+                                attitudeStale: vehicle.attitudeStale,
+                                isSub: vehicle.isSub, depth: vehicle.depth, leakDetected: vehicle.leakDetected)
                             .frame(height: min(geo.size.height * 0.48, 340))
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 6) {
@@ -87,6 +88,7 @@ struct RootView: View {
                             case .actions: ScrollView { ActionsView() }
                             case .checklist: ChecklistView()
                             case .servo: ScrollView { ServoView() }
+                            case .control: ScrollView { ControlView() }
                             case .graph: GraphView()
                             case .status: StatusListView()
                             case .messages: MessagesView()

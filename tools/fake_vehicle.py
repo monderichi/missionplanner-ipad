@@ -26,9 +26,26 @@ NAMES = {m["id"]: m["name"] for m in M.DEFS}
 HOME = (37.9838, 23.7275, 120.0)  # lat, lon, alt AMSL
 SYS, COMP = 1, 1
 
+# --type selects what the fake vehicle pretends to be (MAV_TYPE, metadata file, default mode, extra params)
+PROFILES = {
+    "copter": dict(mav_type=2, meta="ArduCopter.json", mode=5, extra=[]),
+    "rover": dict(mav_type=10, meta="ArduRover.json", mode=4,
+                  extra=["MODE_CH", "MODE1", "MODE2", "MODE3", "MODE4", "MODE5", "MODE6", "CRUISE_SPEED",
+                         "CRUISE_THROTTLE", "WP_SPEED", "WP_RADIUS", "ATC_STR_RAT_P", "ATC_STR_RAT_I",
+                         "ATC_SPEED_P", "FS_ACTION", "FS_TIMEOUT", "MOT_PWM_TYPE", "MOT_THR_MIN", "MOT_THR_MAX",
+                         "SERVO1_FUNCTION", "SERVO3_FUNCTION", "TURN_RADIUS"]),
+    "boat": dict(mav_type=11, meta="ArduRover.json", mode=4, extra=["FRAME_CLASS", "CRUISE_SPEED", "WP_RADIUS"]),
+    "sub": dict(mav_type=12, meta="ArduSub.json", mode=19,
+                extra=["FRAME_CONFIG", "JS_GAIN_DEFAULT", "JS_GAIN_MAX", "JS_GAIN_MIN", "JS_GAIN_STEPS",
+                       "JS_THR_GAIN", "SURFACE_DEPTH", "FS_LEAK_ENABLE", "FS_PRESS_ENABLE", "FS_PRESS_MAX",
+                       "FS_TEMP_ENABLE", "FS_TEMP_MAX", "FS_PILOT_INPUT", "FS_PILOT_TIMEOUT", "LEAK1_PIN",
+                       "LEAK1_LOGIC", "BTN0_FUNCTION", "BTN1_FUNCTION", "BTN2_FUNCTION"]),
+}
+PROFILE = PROFILES["copter"]
+
 
 def build_params():
-    meta_path = os.path.join(HERE, "..", "App", "Resources", "ParamMeta", "ArduCopter.json")
+    meta_path = os.path.join(HERE, "..", "App", "Resources", "ParamMeta", PROFILE["meta"])
     meta = json.load(open(meta_path, encoding="utf-8"))
     wanted = ["FRAME_CLASS", "FRAME_TYPE", "ARMING_CHECK", "SERIAL6_PROTOCOL", "SERIAL6_BAUD", "SR6_EXTRA1",
               "SR6_EXTRA2", "SR6_POSITION", "FENCE_ENABLE", "FENCE_TYPE", "FENCE_ALT_MAX", "FENCE_ACTION",
@@ -46,7 +63,11 @@ def build_params():
                 "ATC_RAT_RLL_D": 0.0036, "ATC_RAT_PIT_P": 0.135, "ANGLE_MAX": 3000, "WPNAV_SPEED": 1000,
                 "RTL_ALT": 1500, "INS_GYRO_FILTER": 20, "MOT_SPIN_ARM": 0.1, "MOT_SPIN_MIN": 0.15,
                 "RCMAP_THROTTLE": 3}
-    names = [n for n in wanted if n in meta]
+    defaults.update({"FRAME_CLASS": 1 if PROFILE["mav_type"] in (2, 10) else (2 if PROFILE["mav_type"] == 11 else 1),
+                     "SERVO1_FUNCTION": 26, "SERVO3_FUNCTION": 70, "MODE_CH": 8, "MODE1": 0, "MODE2": 4, "MODE3": 10,
+                     "MODE4": 11, "MODE5": 15, "MODE6": 5, "CRUISE_SPEED": 3, "JS_GAIN_DEFAULT": 0.5})
+    names = [n for n in wanted + PROFILE["extra"] if n in meta]
+    names = list(dict.fromkeys(names))
     # pad with more real names so the list looks like a real vehicle (but stays quick to download)
     for n in sorted(meta):
         if len(names) >= 220:
@@ -87,7 +108,7 @@ class Vehicle:
         self.mission = mission_items()
         self.upload = None
         self.t0 = time.time()
-        self.mode = 5  # Loiter
+        self.mode = PROFILE["mode"]  # Loiter / Hold / Manual
         self.armed = False
         self.alive = True
 
@@ -129,7 +150,7 @@ class Vehicle:
             if n % 2 == 0:
                 lat = HOME[0] + 0.0004 * math.sin(t * 0.1)
                 lon = HOME[1] + 0.0006 * math.cos(t * 0.1)
-                rel = 12 + 3 * math.sin(t * 0.2)
+                rel = {2: 12 + 3 * math.sin(t * 0.2), 12: -(4 + 1.5 * math.sin(t * 0.2))}.get(PROFILE["mav_type"], 0.0)
                 self.send(74, airspeed=4.2, groundspeed=4.0, heading=int(math.degrees(yaw)) % 360, throttle=38,
                           alt=HOME[2] + rel, climb=0.6 * math.cos(t * 0.2))
                 self.send(33, time_boot_ms=int(t * 1000) & 0xFFFFFFFF, lat=int(lat * 1e7), lon=int(lon * 1e7),
@@ -137,7 +158,7 @@ class Vehicle:
                           hdg=int(math.degrees(yaw) * 100) % 36000)
             if n % 10 == 0:
                 base = 81 | (128 if self.armed else 0)
-                self.send(0, type=2, autopilot=3, base_mode=base, custom_mode=self.mode, system_status=3,
+                self.send(0, type=PROFILE["mav_type"], autopilot=3, base_mode=base, custom_mode=self.mode, system_status=3,
                           mavlink_version=3)
                 sensors = 0x3020FC2F | (1 << 28)
                 self.send(1, onboard_control_sensors_present=sensors, onboard_control_sensors_enabled=sensors,
@@ -146,6 +167,9 @@ class Vehicle:
                 self.send(24, time_usec=int(time.time() * 1e6), fix_type=3, lat=int(HOME[0] * 1e7),
                           lon=int(HOME[1] * 1e7), alt=int(HOME[2] * 1000), eph=78, epv=120, vel=400, cog=9000,
                           satellites_visible=14)
+                if PROFILE["mav_type"] == 12:  # external depth sensor: pressure (hPa) + water temperature (cdegC)
+                    self.send(137, time_boot_ms=int(t * 1000) & 0xFFFFFFFF, press_abs=1013.25 + 98.1 * 4,
+                              press_diff=0.0, temperature=1450)
                 self.send(193, flags=0x1FF, velocity_variance=0.12, pos_horiz_variance=0.08,
                           pos_vert_variance=0.10, compass_variance=0.05, terrain_alt_variance=0.0)
                 self.send(241, time_usec=int(time.time() * 1e6), vibration_x=8.5, vibration_y=9.1, vibration_z=12.4)
@@ -179,6 +203,8 @@ class Vehicle:
                               altitude_type=0, callsign=list(call.ljust(9, b"\0")), emitter_type=1, tslc=1)
             if n == 30:
                 self.send(253, severity=6, text=list(b"ArduCopter V4.7.3 (fake for CI)".ljust(50, b"\0")))
+            if n == 60 and PROFILE["mav_type"] == 12:  # ArduSub announces water ingress like this
+                self.send(253, severity=2, text=list(b"Leak Detected".ljust(50, b"\0")))
             if n % 300 == 20 and not self.armed:  # like ArduPilot: repeat PreArm failures every 30 s while disarmed
                 self.send(253, severity=4, text=list(b"PreArm: RC not calibrated (fake)".ljust(50, b"\0")))
             n += 1
@@ -298,5 +324,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=5760)
     ap.add_argument("--seconds", type=int, default=600)
+    ap.add_argument("--type", choices=sorted(PROFILES), default="copter")
     a = ap.parse_args()
+    PROFILE = PROFILES[a.type]
     serve(a.port, a.seconds)

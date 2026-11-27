@@ -24,12 +24,17 @@ struct QuickView: View {
     @EnvironmentObject var vehicle: VehicleModel
     private static let defaultsKey = "quick.tiles"
     private static let defaultTiles = ["alt", "gs", "wpdist", "climb", "yaw", "batv"]
-    @State private var tiles: [String] = QuickView.loadTiles()
+    /// ArduSub defaults: depth, heading, water temperature, battery, vertical speed, ground speed.
+    private static let subTiles = ["depth", "yaw", "wtemp", "batv", "climb", "gs"]
+    /// nil = the user has not customised the tiles, so the defaults follow the vehicle type.
+    @State private var custom: [String]? = QuickView.loadCustom()
 
-    private static func loadTiles() -> [String] {
+    private var tiles: [String] { custom ?? (vehicle.isSub ? QuickView.subTiles : QuickView.defaultTiles) }
+
+    private static func loadCustom() -> [String]? {
         let saved = UserDefaults.standard.stringArray(forKey: defaultsKey) ?? []
-        if saved.count == 6 && saved.allSatisfy({ TelemetryCatalogue.def($0) != nil }) { return saved }
-        return defaultTiles
+        if saved.count == 6 && saved != defaultTiles && saved.allSatisfy({ TelemetryCatalogue.def($0) != nil }) { return saved }
+        return nil
     }
 
     var body: some View {
@@ -68,14 +73,16 @@ struct QuickView: View {
     }
 
     private func setTile(_ i: Int, _ id: String) {
-        guard i < tiles.count else { return }
-        tiles[i] = id
-        UserDefaults.standard.set(tiles, forKey: QuickView.defaultsKey)
+        var list = tiles
+        guard i < list.count else { return }
+        list[i] = id
+        custom = list
+        UserDefaults.standard.set(list, forKey: QuickView.defaultsKey)
     }
 
     private func resetTiles() {
-        tiles = QuickView.defaultTiles
-        UserDefaults.standard.set(tiles, forKey: QuickView.defaultsKey)
+        custom = nil
+        UserDefaults.standard.removeObject(forKey: QuickView.defaultsKey)
     }
 }
 

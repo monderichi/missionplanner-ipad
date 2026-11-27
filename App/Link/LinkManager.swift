@@ -27,6 +27,7 @@ final class LinkManager: ObservableObject {
     let logs = LogStore()
     let history = TelemetryHistory()
     let inspector = MessageInspector()
+    let manual = ManualControl()
     /// True while a .tlog is being replayed (nothing is sent, no sessions attached).
     @Published private(set) var isReplaying = false
 
@@ -76,6 +77,12 @@ final class LinkManager: ObservableObject {
         speech.observe(vehicle)
         logs.send = { [weak self] m in self?.send(any: m) }
         history.start(vehicle: vehicle)
+        manual.vehicle = vehicle
+        manual.send = { [weak self] m in self?.send(m) }
+        manual.linkActive = { [weak self] in
+            guard let self else { return false }
+            return self.state.isActive && !self.isReplaying
+        }
     }
 
     /// Plays a .tlog through the normal pipeline (read-only).
@@ -175,6 +182,7 @@ final class LinkManager: ObservableObject {
     }
 
     func disconnect() {
+        manual.setEnabled(false) // one neutral frame while the transport still exists
         connectGeneration += 1 // cancels a pending backpack lookup
         heartbeatTimer?.cancel()
         heartbeatTimer = nil

@@ -70,6 +70,12 @@ final class VehicleModel: ObservableObject {
     @Published private(set) var radioRSSI: Int?
     @Published private(set) var radioRemoteRSSI: Int?
 
+    // ArduSub: SCALED_PRESSURE2 is the external (water) pressure/temperature sensor
+    /// Water temperature in degC from SCALED_PRESSURE2 (nil until received).
+    @Published private(set) var waterTemperature: Double?
+    /// Set when a STATUSTEXT mentions a leak (ArduSub "Leak Detected"); cleared by a "cleared" text or reset.
+    @Published private(set) var leakDetected = false
+
     @Published private(set) var messages: [StatusMessage] = []
     @Published private(set) var messageCounts: [String: Int] = [:]
 
@@ -135,6 +141,12 @@ final class VehicleModel: ObservableObject {
     @Published private(set) var attitudeStale = false
     static let maxMessages = 300
 
+    /// True when the heartbeat says the vehicle is a submarine (ArduSub).
+    var isSub: Bool { MAVType(rawValue: vehicleType)?.firmware == .sub }
+
+    /// Depth in metres, positive down. ArduSub reports altitude relative to the surface (negative below).
+    var depth: Double { isSub ? -relativeAltitude : 0 }
+
     var modeName: String {
         systemID == nil ? "—" : ArduPilotModes.name(customMode: customMode, vehicleType: vehicleType)
     }
@@ -185,9 +197,13 @@ final class VehicleModel: ObservableObject {
         attitudeStale = false
         heartbeatSources = [:]
         traffic = [:]
+        leakDetected = false
+        waterTemperature = nil
     }
 
     func clearTrail() { trail = [] }
+
+    func clearLeak() { leakDetected = false }
 
     private func updateESCs(base: Int, rpm: [UInt16], temp: [UInt8], volt: [UInt16], curr: [UInt16]) {
         var list = escs
@@ -344,6 +360,10 @@ final class VehicleModel: ObservableObject {
             sensorsEnabled = m.onboardControlSensorsEnabled
             sensorsHealthy = m.onboardControlSensorsHealth
 
+        case MAV.ScaledPressure2.mavInfo.id:
+            guard let m = packet.decode(MAV.ScaledPressure2.self) else { break }
+            waterTemperature = Double(m.temperature) / 100
+
         case MAV.NavControllerOutput.mavInfo.id:
             guard let m = packet.decode(MAV.NavControllerOutput.self) else { break }
             waypointDistance = Double(m.wpDist)
@@ -436,6 +456,11 @@ final class VehicleModel: ObservableObject {
             statusChunks[st.id] = nil
         }
         let sev = MAVSeverity(rawValue: st.severity) ?? .info
+        let lower = text.lowercased()
+        if lower.contains("leak") {
+            let cleared = lower.contains("clear")
+            if leakDetected == cleared { leakDetected = !cleared }
+        }
         messages.insert(StatusMessage(date: Date(), severity: sev, text: text), at: 0)
         if messages.count > Self.maxMessages { messages.removeLast(messages.count - Self.maxMessages) }
     }

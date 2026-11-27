@@ -21,6 +21,8 @@ enum TelemetryCatalogue {
         TelemetrySeriesDef(id: "yaw", label: "Yaw", unit: "deg", value: { $0.yaw }),
         TelemetrySeriesDef(id: "alt", label: "Altitude", unit: "m", value: { $0.relativeAltitude }),
         TelemetrySeriesDef(id: "climb", label: "Vertical speed", unit: "m/s", value: { $0.climbRate }),
+        TelemetrySeriesDef(id: "depth", label: "Depth", unit: "m", value: { $0.depth }),
+        TelemetrySeriesDef(id: "wtemp", label: "Water temp", unit: "C", value: { $0.waterTemperature ?? 0 }),
         TelemetrySeriesDef(id: "gs", label: "Ground speed", unit: "m/s", value: { $0.groundspeed }),
         TelemetrySeriesDef(id: "as", label: "Airspeed", unit: "m/s", value: { $0.airspeed }),
         TelemetrySeriesDef(id: "thr", label: "Throttle", unit: "%", value: { Double($0.throttle) }),
