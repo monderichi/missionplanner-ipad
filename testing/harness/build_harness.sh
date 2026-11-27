@@ -8,13 +8,17 @@ PKG="$ROOT/testing/.build/harnesspkg"
 mkdir -p "$ROOT/testing/logs"
 rm -rf "$PKG/Sources"; mkdir -p "$PKG/Sources/Harness/App"
 for d in Link Vehicle Storage; do cp "$ROOT"/App/$d/*.swift "$PKG/Sources/Harness/App/"; done
+# App/Control: only the model (ManualControl); ControlView is SwiftUI. UIKit symbols come from UIKitShim.
+[[ -f "$ROOT/App/Control/ManualControl.swift" ]] && cp "$ROOT/App/Control/ManualControl.swift" "$PKG/Sources/Harness/App/"
+mkdir -p "$PKG/Sources/UIKit"; cp "$ROOT/testing/harness/UIKitShim/UIKit.swift" "$PKG/Sources/UIKit/"
 cp "$ROOT"/testing/harness/Sources/*.swift "$PKG/Sources/Harness/"
 cat > "$PKG/Package.swift" <<PKGEOF
 // swift-tools-version:5.9
 import PackageDescription
 let package = Package(name: "Harness", platforms: [.macOS(.v13)],
   dependencies: [.package(path: "$ROOT/Packages/MAVLinkKit")],
-  targets: [.executableTarget(name: "Harness", dependencies: [.product(name: "MAVLinkKit", package: "MAVLinkKit")],
+  targets: [.target(name: "UIKit", path: "Sources/UIKit"),
+            .executableTarget(name: "Harness", dependencies: ["UIKit", .product(name: "MAVLinkKit", package: "MAVLinkKit")],
                               path: "Sources/Harness", swiftSettings: [.unsafeFlags(["-swift-version", "5"])])])
 PKGEOF
 cd "$PKG"

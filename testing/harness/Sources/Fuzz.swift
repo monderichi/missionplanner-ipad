@@ -9,7 +9,7 @@ import MAVLinkKit
 var fuzzLastID: UInt32 = 0
 var fuzzIteration = 0
 
-private func fuzzTrapHandler(_ sig: Int32) {
+func fuzzTrapHandler(_ sig: Int32) {
     let s = "FUZZ CRASH at iteration \(fuzzIteration) msgid \(fuzzLastID) (\(MAVLinkMessages.info(for: fuzzLastID)?.name ?? "?"))\n"
     _ = s.withCString { write(2, $0, strlen($0)) }
     signal(sig, SIG_DFL)

@@ -3,6 +3,8 @@
 
 import Foundation
 import MAVLinkKit
+import UIKit
+import CoreGraphics
 
 enum Scenarios {
     static let all: [String: (Ctx) -> Void] = [
@@ -19,7 +21,7 @@ enum Scenarios {
         "compid_switch": compidSwitch, "long_session": longSession, "sitl_smoke": sitlSmoke,
         "link_loss_proxy": linkLossProxy, "sitl_arm": sitlArm, "servo_before_params": servoBeforeParams,
         "esc_telemetry": escTelemetry, "prearm_check": prearmCheck, "accel_cal": accelCal, "compass_cal": compassCal,
-        "geofence_apply": geofenceApply, "fence_breach": fenceBreach, "motor_test": motorTest, "mission_edge": missionEdge, "sitl_auto": sitlAuto, "sitl_accel_probe": sitlAccelProbe, "sitl_fence": sitlFence, "param_edge": paramEdge, "probe:fuzz_pipeline": Fuzz.run,
+        "geofence_apply": geofenceApply, "fence_breach": fenceBreach, "motor_test": motorTest, "mission_edge": missionEdge, "sitl_manual": sitlManual, "manual_control": manualControl, "sitl_auto": sitlAuto, "sitl_accel_probe": sitlAccelProbe, "sitl_fence": sitlFence, "param_edge": paramEdge, "probe:fuzz_pipeline": Fuzz.run,
     ].merging(Probes.all, uniquingKeysWith: { a, _ in a })
 
     // MARK: B. connection
@@ -888,5 +890,76 @@ enum Scenarios {
         c.check("G4 real ArduPilot fence action shown", act != nil, "mode=\(c.vehicle.modeName) msgs=\(c.vehicle.messages.prefix(4).map(\.text))")
         c.note("BUG-022 on real firmware: \(act != nil ? "immediate breach after applying the fence in flight" : "no breach")")
         c.waitUntil(150) { !c.vehicle.armed }
+    }
+
+    // MARK: round 4 (code merged from origin/main)
+
+    /// ManualControl (App/Control/ManualControl.swift): opt-in, 10 Hz frames, auto-off on link loss / backgrounding.
+    static func manualControl(_ c: Ctx) {
+        guard c.connectAndWaitForVehicle() else { return }
+        let m = c.link.manual
+        let rover = c.args.extra["expect"] != "unsupported"
+        m.useGamepad = false
+        m.setEnabled(true)
+        c.pump(0.3)
+        if !rover {
+            c.check("manual control refused on a copter", !m.enabled, "enabled=\(m.enabled)")
+            return
+        }
+        c.check("manual control enables on a rover", m.enabled)
+        m.rightStick = CGPoint(x: 0.5, y: 0); m.leftStick = CGPoint(x: 0, y: 1)
+        c.pump(1.2)
+        c.check("frame follows the sticks (steer y, throttle z)", m.frame.y > 300 && m.frame.z > 900, "\(m.frame)")
+        // NaN robustness: a NaN axis must not become full deflection
+        m.rightStick = CGPoint(x: CGFloat.nan, y: 0)
+        c.pump(0.3)
+        c.check("NaN stick input is not sent as full deflection", abs(m.frame.y) < 1000, "frame.y=\(m.frame.y) for NaN input")
+        m.rightStick = .zero; m.leftStick = .zero
+        // backgrounding
+        NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
+        c.pump(0.3)
+        c.check("leaving the app disables manual control", !m.enabled)
+        // link loss
+        m.setEnabled(true); c.pump(0.3)
+        c.drone("silent 9")
+        let off = c.waitUntil(9) { !m.enabled }
+        c.check("link loss disables manual control", off != nil, "t=\(String(describing: off))")
+        c.metric("manual_off_after_link_loss_s", off.map { String(format: "%.1f", $0) } ?? "never")
+        c.waitUntil(12) { c.vehicle.heartbeatAlive }
+        c.check("stays off after the link returns (needs a new opt-in)", !m.enabled)
+    }
+
+    /// S-R5/S-R6/S-S3 on real ArduRover / ArduSub SITL: arm in MANUAL, drive with ManualControl, link loss → off.
+    static func sitlManual(_ c: Ctx) {
+        guard c.connectAndWaitForVehicle(timeout: 30) else { return }
+        c.waitParams(timeout: 90)
+        let isSub = c.vehicle.vehicleTypeName == "ArduSub"
+        c.note("vehicle \(c.vehicle.vehicleTypeName) mode \(c.vehicle.modeName)")
+        c.waitUntil(90) { c.vehicle.gpsFixType >= 3 }
+        c.link.commands.setMode(0, name: "Manual") // MANUAL is 0 for Rover; Sub MANUAL is 19
+        if isSub { c.link.commands.setMode(19, name: "Manual") }
+        c.pump(2)
+        guard armWithRetries(c) else { return c.check("SITL arms in MANUAL", false, c.link.commands.lastResult ?? "nil") }
+        let m = c.link.manual
+        m.useGamepad = false
+        m.setEnabled(true)
+        c.check("manual control enabled", m.enabled)
+        let p0 = c.vehicle.position, alt0 = c.vehicle.relativeAltitude
+        if isSub { m.rightStick = CGPoint(x: 0, y: 0.8); m.leftStick = CGPoint(x: 0, y: -0.6) } // forward + descend
+        else { m.leftStick = CGPoint(x: 0, y: 0.6); m.rightStick = CGPoint(x: 0.3, y: 0) }    // throttle + slight right
+        c.pump(8)
+        let moved = p0.flatMap { a in c.vehicle.position.map { Geo.distance(a, $0) } } ?? 0
+        c.metric("moved_m", String(format: "%.1f", moved)); c.metric("alt_change_m", String(format: "%.2f", c.vehicle.relativeAltitude - alt0))
+        c.check("vehicle moves under MANUAL_CONTROL (S-R5/S-S3)", moved > 2 || abs(c.vehicle.relativeAltitude - alt0) > 0.5,
+                "moved=\(moved) m alt \(alt0)->\(c.vehicle.relativeAltitude) gs=\(c.vehicle.groundspeed) frame=\(m.frame)")
+        let gsDriving = c.vehicle.groundspeed
+        m.leftStick = .zero; m.rightStick = .zero
+        c.pump(3)
+        // MANUAL with zero throttle coasts (ArduRover), so only "slowing down" is expected, not an immediate stop
+        c.check("sticks released: neutral frame sent and the vehicle slows", m.frame == ManualControl.Frame(x: 0, y: 0, z: isSub ? 500 : 0, r: 0)
+                && c.vehicle.groundspeed < gsDriving, "gs \(gsDriving) -> \(c.vehicle.groundspeed) frame=\(m.frame)")
+        m.setEnabled(false)
+        c.link.commands.arm(false, force: true)
+        c.waitUntil(5) { !c.vehicle.armed }
     }
 }

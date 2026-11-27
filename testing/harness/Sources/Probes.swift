@@ -108,6 +108,35 @@ enum Probes {
             c.check("ports 0/0 from backpack are rejected (fallback to typed ports)", zero == nil || zero!.ports.listen != 0,
                     "app would connect to 10.0.0.1:0 from iPad port 0")
         },
+        // New DataFlash (.bin) parser from origin/main: mutate the real fixture and feed random data.
+        "probe:dataflash_fuzz": { c in
+            signal(SIGTRAP, fuzzTrapHandler); signal(SIGILL, fuzzTrapHandler)
+            let fixture = URL(fileURLWithPath: CommandLine.arguments.first { $0.hasSuffix("sample.bin") }
+                ?? "Packages/MAVLinkKit/Tests/MAVLinkKitTests/Fixtures/sample.bin")
+            guard let base = try? Data(contentsOf: fixture) else { return c.check("fixture readable", false, fixture.path) }
+            var rng = SystemRandomNumberGenerator()
+            var ok = 0, threw = 0
+            let n = Int(c.args.extra["iterations"] ?? "20000") ?? 20000
+            let t0 = Date()
+            for i in 0..<n {
+                fuzzIteration = i
+                var d = [UInt8](base)
+                switch i % 4 {
+                case 0: for _ in 0..<Int.random(in: 1...20, using: &rng) { d[Int.random(in: 0..<d.count, using: &rng)] = UInt8.random(in: 0...255, using: &rng) }
+                case 1: d = Array(d.prefix(Int.random(in: 0..<d.count, using: &rng)))
+                case 2: // corrupt a FMT record's length/format fields (FMT = A3 95 80)
+                    if let k = (0..<(d.count - 6)).filter({ d[$0] == 0xA3 && d[$0 + 1] == 0x95 && d[$0 + 2] == 0x80 }).randomElement(using: &rng) {
+                        d[k + 4] = UInt8.random(in: 0...255, using: &rng); d[k + 3] = UInt8.random(in: 0...255, using: &rng)
+                    }
+                default: d = (0..<Int.random(in: 0...4000, using: &rng)).map { _ in UInt8.random(in: 0...255, using: &rng) }
+                    if d.count > 3 && Bool.random(using: &rng) { d[0] = 0xA3; d[1] = 0x95; d[2] = 0x80 }
+                }
+                do { _ = try DataFlashLog.parse(Data(d)); ok += 1 } catch { threw += 1 }
+            }
+            c.metric("dataflash_inputs", n); c.metric("parsed", ok); c.metric("threw", threw)
+            c.metric("seconds", String(format: "%.1f", Date().timeIntervalSince(t0)))
+            c.check("\(n) mutated/random .bin inputs parsed or rejected without a trap", true)
+        },
         // MAVLinkKit command session: same-command-id overwrite
         "probe:command_overwrite": { c in
             let s = CommandSession(targetSystem: 1)

@@ -6,6 +6,7 @@ app harness against it, saves logs to testing/logs/<scenario>.*.log, prints a on
   python3 testing/scenarios/run.py all          # everything except long/SITL ones
   python3 testing/scenarios/run.py probes       # crash probes only
   python3 testing/scenarios/run.py --list
+  RUN_SLOT_BASE=1 python3 testing/scenarios/run.py ...   # use worker slots from 1 (keep 5799/17001 free)
   python3 testing/scenarios/run.py -j 4 all      # 4 scenarios at a time (each worker gets its own ports,
                                                  # SITL instance and Documents folder)
 
@@ -102,6 +103,9 @@ S = {
     "mission_oob": dict(drone=TCP + ["--fault", "mission_oob"], name="mission_edge"),
     "param_16char": dict(drone=TCP + ["--fault", "param_16char"], harness=H_TCP + ["--name", "ABCDEFGHIJKLMNOP"], name="param_edge"),
     "param_count_change": dict(drone=TCP + ["--fault", "param_count_change"], name="param_edge"),
+    "manual_control_rover": dict(drone=TCP + ["--vehicle-type", "10"], name="manual_control"),
+    "manual_control_sub": dict(drone=TCP + ["--vehicle-type", "12"], name="manual_control"),
+    "manual_control_copter": dict(drone=TCP, harness=H_TCP + ["--expect", "unsupported"], name="manual_control"),
     "long_session": dict(drone=TCP, harness=H_TCP + ["--secs", "300"], long=True),
     "sitl_smoke": dict(sitl=True, harness=H_SITL, long=True),
     "sitl_params": dict(sitl=True, harness=H_SITL + ["--param-timeout", "90"], name="params", long=True),
@@ -117,6 +121,10 @@ S = {
     "sitl_reboot": dict(sitl=True, harness=H_SITL, name="reboot", long=True),
     "sitl_prearm_check": dict(sitl=True, harness=H_SITL, name="prearm_check", long=True),
     "sitl_log_download": dict(sitl=True, harness=H_SITL + ["--expect-logs", "-1", "--dl-timeout", "120"], name="log_download", long=True),
+    "sitl_rover_manual": dict(sitl=True, vehicle="rover", harness=H_SITL, name="sitl_manual", long=True),
+    "sitl_sub_manual": dict(sitl=True, vehicle="sub", harness=H_SITL, name="sitl_manual", long=True),
+    "sitl_rover_setup_params": dict(sitl=True, vehicle="rover", harness=H_SITL + ["--param-timeout", "90"], name="params", long=True),
+    "sitl_sub_setup_params": dict(sitl=True, vehicle="sub", harness=H_SITL + ["--param-timeout", "90"], name="params", long=True),
     "sitl_lossy": dict(sitl=True, harness=["--kind", "udpListen", "--port", "14550", "--param-timeout", "180"],
                        sitl_port=14560, proxy=["--listen", "14560", "--loss", "30", "--latency", "80", "--jitter", "60"],
                        name="lossy_link", long=True),
@@ -132,7 +140,7 @@ PROBES = ["probe:accelcal_nan", "probe:accelcal_neg", "probe:accelcal_huge", "pr
           "probe:param_file_nan", "probe:mission_item_nan_coord", "probe:survey_nan_angle", "probe:survey_huge",
           "probe:hud_label_nan", "probe:hud_label_huge", "probe:fltmode_ch0", "probe:takeoff_alt_huge",
           "probe:fltmode_picker_negative", "probe:command_overwrite", "probe:waypoint_editor_lat_300",
-          "probe:elrs_backpack_json"]
+          "probe:elrs_backpack_json", "probe:dataflash_fuzz"]
 for p in PROBES:
     S[p] = dict(drone=None)
 # fuzzing (known crash 76 = COMMAND_LONG/ACCELCAL skipped in the second run so other crashes can surface)
@@ -178,15 +186,19 @@ def stop(p):
             os.killpg(p.pid, signal.SIGKILL)
 
 
-def start_sitl(name, port=14550, slot=0):
+def start_sitl(name, port=14550, slot=0, vehicle="copter"):
+    """vehicle: copter (quad), rover, sub (vectored ROV): matching binary, model and default params."""
+    binary, model, parm = {"copter": ("arducopter", "quad", "copter.parm"), "rover": ("ardurover", "rover", "rover.parm"),
+                           "sub": ("ardusub", "vectored", "sub.parm")}[vehicle]
+    SITL_BIN = os.path.join(ROOT, "testing", ".sitl", "ardupilot", "build", "sitl", "bin", binary)
     if not os.path.exists(SITL_BIN):
         return None, "SITL not built (testing/sitl/build_sitl.sh)"
     wd = os.path.join(ROOT, "testing", ".build", f"sitl_run{slot}")
     os.makedirs(wd, exist_ok=True)
-    defaults = os.path.join(ROOT, "testing", ".sitl", "ardupilot", "Tools", "autotest", "default_params", "copter.parm")
+    defaults = os.path.join(ROOT, "testing", ".sitl", "ardupilot", "Tools", "autotest", "default_params", parm)
     # MAVLink goes out as UDP to the app's "UDP listen" port; serial1/2 point at unused localhost ports so SITL opens
     # no TCP listeners (its default tcp:5760/5762/5763 would listen on all interfaces).
-    cmd = [SITL_BIN, "--model", "quad", "--speedup", "1", "--home", "-35.363262,149.165237,584,353",
+    cmd = [SITL_BIN, "--model", model, "--speedup", "1", "--home", "-35.363262,149.165237,584,353",
            "--defaults", defaults, "--wipe", "--sim-address", "127.0.0.1",
            "--serial0", f"udpclient:127.0.0.1:{port}", "--serial1", "udpclient:127.0.0.1:14571",
            "--serial2", "udpclient:127.0.0.1:14572", "-I", str(slot)]
@@ -206,7 +218,7 @@ def run(key, hb, slot=0):
     drone = proxy = sitl = None
     try:
         if spec.get("sitl"):
-            sitl, err = start_sitl(key, spec.get("sitl_port", 14550) + 100 * slot, slot)
+            sitl, err = start_sitl(key, spec.get("sitl_port", 14550) + 100 * slot, slot, spec.get("vehicle", "copter"))
             if err:
                 return "SKIP", err
         if spec.get("proxy"):
@@ -271,7 +283,8 @@ def main():
     hb = harness_bin()
     results = []
     lock = threading.Lock()
-    slots = list(range(jobs))
+    base = int(os.environ.get("RUN_SLOT_BASE", "0"))  # e.g. 1: leave slot 0's ports to a UI test run
+    slots = list(range(base, base + jobs))
     unknown = [k for k in args if k not in S]
     for k in unknown:
         print(f"unknown scenario {k}")

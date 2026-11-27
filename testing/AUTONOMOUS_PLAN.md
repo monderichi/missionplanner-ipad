@@ -17,7 +17,7 @@ The user's original request is kept verbatim at the end; the version below is th
 
 ## Steps (same meaning as the user's list; numbered as theirs where they gave numbers)
 
-- [ ] **0. Exhaust the Mac test suite** (current branch `testing/break-test-2026-11-27`). Extend the Mac Catalyst UI
+- [x] **0. Exhaust the Mac test suite** (current branch `testing/break-test-2026-11-27`). Extend the Mac Catalyst UI
   tests and run them, in this order:
   a. Plan screen: add/drag/delete waypoints by clicking the map, waypoint editor, Survey, Fence, Rally, `.waypoints`
      save/load through the file dialog (E3, E5, E6).
@@ -32,8 +32,8 @@ The user's original request is kept verbatim at the end; the version below is th
   h. Light and dark appearance of HUD, banners and state colours.
   i. Offline maps E1/E2 with a tiny area only (respect Esri/OSM tile policies; OSM bulk download stays disabled).
   Record every result in `TESTING_RESULTS.md` (new items get new BUG ids; coverage matrix updated).
-- [ ] **1. Commit** the findings and all useful test code/docs on `testing/break-test-2026-11-27`.
-- [ ] **2. Pull** the latest `origin/main` (12 new upstream commits by monderichi at 23:57: UGV/ROV, gamepad, batch 2,
+- [x] **1. Commit** the findings and all useful test code/docs on `testing/break-test-2026-11-27`.
+- [x] **2. Pull** the latest `origin/main` (12 new upstream commits by monderichi at 23:57: UGV/ROV, gamepad, batch 2,
   `TESTING_SIMULATOR.md`, `PROGRESS.md`) and merge it into the test branch.
 - [ ] **3. Review the upstream changes and re-run the tests**: which reported bugs are now fixed, still present, or
   changed; which new bugs the new code brings (new screens, ArduRover/ArduSub, gamepad). Re-run unit tests, harness
@@ -77,3 +77,18 @@ The user's original request is kept verbatim at the end; the version below is th
 > Keep detailed documentation at all times in the form of .md files and comments. I will be afk so sort out any
 > permissions now. Ask me any and all questions now. Do not get stuck at any step. If usage runs out make sure to
 > autoresume so you get all this work done by 10:00. Set up autoresume now! for both usage resets.
+- 00:2x Step 0 done (round-3 UI tests; long 30-min UI session running in background, result added in step 3). Step 1 committed 3ec59d6.
+- 00:30 Step 2 done: merged origin/main (12 commits) → 467f9ea; CLAUDE.md conflict resolved by keeping both sections. Step 3 started: no reported bug is fixed upstream; harness needs a UIKit shim (added).
+- 00:36 STATE FOR RESUME (usage limit hit). Step 3 in progress on branch testing/break-test-2026-11-27 (merged origin/main 467f9ea).
+  Done in step 3: no BUG-001..037 fixed upstream (cause lines unchanged); harness builds with UIKit shim
+  (testing/harness/UIKitShim); ManualControl scenarios PASS except NaN→full deflection (new BUG-038 Low);
+  DataFlash fuzz 20k PASS; rover/sub SITL built, sitl_rover_manual/sitl_sub_manual drive OK (rover check relaxed);
+  ADS-B: no coordinate check + no count cap (BUG-039 candidate, UI tests test_Z7_/test_perf_adsbFlood written, NOT run);
+  UI class BreakTestUITests3 (TESTING_SIMULATOR.md S-* items) written, NOT run.
+  Background runs at stop time: Catalyst long session (perf CSV testing/logs/catalyst_perf_test_perf_longSession.csv; RSS rising
+  ~4.7 MB/min at normal rates, ~29 % CPU) and full retest `testing/logs/retest_after_pull.log` (RUN_SLOT_BASE=1 -j 4 everything).
+  param_parse.py (BUG-034 metadata) failed with exit 1 in testing/.sitl/pdef/*/parse.log: check the log (likely missing
+  python deps such as lxml in testing/.venv) before writing tools/gen_param_meta_ardupilot.py.
+  NEXT: 1) read retest_after_pull.log + long-session CSV; 2) catalyst.sh build, then uitest BreakTestUITests3, BreakTestUITests2
+  (ADS-B tests), BreakTestUITests; 3) write TESTING_RESULTS.md section 8 "Re-test after pull" (BUG-038, -039, long session);
+  4) commit (step 4), push bug_fixes (step 5); 5) fixes per the design list in testing/FIX_LOG.md (create it).

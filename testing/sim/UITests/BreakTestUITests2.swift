@@ -11,7 +11,7 @@ final class BreakTestUITests2: XCTestCase {
     override func setUp() {
         continueAfterFailure = true
         for f in ["nan_attitude", "bad_latlon", "fltmode_ch0", "battery_critical", "gps_loss", "high_rate",
-                  "statustext_flood", "reject_arm"] { drone("fault \(f) off") }
+                  "statustext_flood", "reject_arm", "adsb", "adsb_bad", "adsb_flood"] { drone("fault \(f) off") }
     }
 
     override func tearDown() {
@@ -415,5 +415,35 @@ final class BreakTestUITests2: XCTestCase {
         for _ in 0..<minutes { sleep(60); if app.state != .runningForeground { break } }
         assertRunning("\(minutes) min session")
         shot("perf-long-session")
+    }
+
+    // MARK: ADS-B (merged from origin/main)
+
+    func test_ADSB_trafficShownOnMap() {
+        launch(); connect(params: false)
+        drone("fault adsb on")
+        sleep(4)
+        assertRunning("ADS-B traffic")
+        XCTAssertTrue(text("TEST0").exists || text("TEST1").exists, "ADS-B traffic labels not shown on the map")
+        shot("ADSB-traffic")
+    }
+
+    func test_Z7_adsbOutOfRangeCoordinate() {
+        launch(); connect(params: false)
+        drone("fault adsb_bad on")
+        sleep(5)
+        assertRunning("ADSB_VEHICLE at lat 200 / lon 210 (expected to be rejected)")
+        shot("ADSB-bad-coordinate")
+    }
+
+    /// 200 new aircraft per second for 60 s (12 000 unique ICAO): sampled by `catalyst.sh perf`.
+    func test_perf_adsbFlood() {
+        launch(); connect(params: false)
+        drone("fault adsb_flood on")
+        sleep(60)
+        drone("fault adsb_flood off")
+        sleep(5)
+        assertRunning("ADS-B flood")
+        shot("ADSB-flood")
     }
 }

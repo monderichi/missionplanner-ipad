@@ -12,9 +12,10 @@ Faults (--fault NAME[,NAME...] at start, or at runtime: echo "fault NAME on|off"
   disconnect_on_takeoff reboot_on_arm second_vehicle other_gcs compid_switch accelcal_nan accelcal_neg
   statustext_flood param_nan fltmode_ch0 mode_change_mid_mission v1_only high_rate wrong_sysid_ack
   ack_wrong_command accelcal_fail magcal_fail no_esc mission_no_space mission_oob param_16char param_count_change
+  adsb adsb_bad adsb_flood
 
 Control port commands (UDP text, default 127.0.0.1:17001): "fault NAME on|off", "silent N" (go silent N s),
-"reboot", "status" (prints state to stdout), "quit".
+"vtype N" (MAV_TYPE: 2 quad, 10 rover, 12 sub), "text SEV MESSAGE" (STATUSTEXT), "reboot", "status", "quit".
 Every event is printed as one line "t=<s> <event>" to stdout (redirect to testing/logs/).
 """
 import argparse
@@ -207,7 +208,7 @@ class Drone:
         f = self.faults
         if self.due("HEARTBEAT", 1, now):
             base = 0x01 | 0x10 | 0x08 | (0x80 if self.armed else 0)  # custom mode, stabilize, guided, armed
-            self.send("HEARTBEAT", custom_mode=self.mode, type=2, autopilot=3, base_mode=base,
+            self.send("HEARTBEAT", custom_mode=self.mode, type=self.a.vehicle_type, autopilot=3, base_mode=base,
                       system_status=4 if self.armed else 3, mavlink_version=3)
             if "second_vehicle" in f:
                 self.send("HEARTBEAT", sysid=2, compid=1, custom_mode=6, type=2, autopilot=3, base_mode=0x81 | 0x80,
@@ -300,6 +301,22 @@ class Drone:
         if "statustext_flood" in f and self.due("FLOOD", 10, now):  # 200 STATUSTEXT/s
             for k in range(20):
                 self.send("STATUSTEXT", severity=6, text=f"Flood {int(now * 100)}-{k} " + "x" * 20)
+        if ("adsb" in f or "adsb_bad" in f) and self.due("ADSB", 2, now):
+            for k in range(3):  # three aircraft circling ~1 km away (ADS-B comes from a separate component, 1/156)
+                a = now / 30 + k * 2.1
+                lat, lon = self.home[0] + 0.009 * math.cos(a), self.home[1] + 0.011 * math.sin(a)
+                if "adsb_bad" in f and k == 0:
+                    lat, lon = 200.0, 210.0  # out of range: what a corrupt/partial ADSB_VEHICLE can carry
+                self.send("ADSB_VEHICLE", sysid=self.sysid, compid=156, ICAO_address=0xABC000 + k, lat=int(lat * 1e7),
+                          lon=int(lon * 1e7), altitude=300000 + 50000 * k, heading=int((math.degrees(a) % 360) * 100),
+                          hor_velocity=6000, callsign=f"TEST{k}", flags=0x1F, emitter_type=1, tslc=1)
+        if "adsb_flood" in f and self.due("ADSBFLOOD", 20, now):
+            for k in range(10):  # 200 new aircraft per second (unique ICAO each): busy-airspace / malformed-feed stress
+                self._adsb_n = getattr(self, "_adsb_n", 0) + 1
+                n = self._adsb_n
+                self.send("ADSB_VEHICLE", sysid=self.sysid, compid=156, ICAO_address=0x100000 + n,
+                          lat=int((self.home[0] + 0.05 * math.sin(n)) * 1e7), lon=int((self.home[1] + 0.05 * math.cos(n * 1.3)) * 1e7),
+                          altitude=500000, heading=(n * 37) % 36000, hor_velocity=20000, callsign=f"F{n:05d}", flags=0x1F)
         if "malformed" in f and self.due("MALFORMED", 5, now):
             self.inject_malformed()
 
@@ -432,6 +449,13 @@ class Drone:
         name = mr.BY_ID[mid]["name"]
         m = mr.decode(mid, pkt["payload"])
         if name == "HEARTBEAT":
+            return
+        if name == "MANUAL_CONTROL":
+            self.stats["manual"] = self.stats.get("manual", 0) + 1
+            now = time.time()
+            if now - getattr(self, "_last_mc_log", 0) > 0.5:
+                self._last_mc_log = now
+                log(f"MANUAL_CONTROL #{self.stats['manual']} x={m['x']} y={m['y']} z={m['z']} r={m['r']} buttons={m['buttons']}")
             return
         if "target_system" in m and m["target_system"] not in (0, self.sysid):
             return
@@ -682,6 +706,11 @@ class Drone:
         elif parts[0] == "silent":
             self.silent_until = time.time() + float(parts[1])
             log(f"CONTROL silent {parts[1]} s")
+        elif parts[0] == "vtype" and len(parts) == 2:  # switch MAV_TYPE at runtime (2 quad, 10 rover, 12 sub)
+            self.a.vehicle_type = int(parts[1])
+            log(f"CONTROL vehicle type -> {parts[1]}")
+        elif parts[0] == "text" and len(parts) >= 3:  # "text SEV message…": send a STATUSTEXT
+            self.statustext(int(parts[1]), " ".join(parts[2:]))
         elif parts[0] == "reboot":
             self.reboot()
         elif parts[0] == "status":
@@ -757,6 +786,7 @@ def main():
     ap.add_argument("--udp-src-port", type=int, default=14590)
     ap.add_argument("--udp-bind", type=int)
     ap.add_argument("--sysid", type=int, default=1)
+    ap.add_argument("--vehicle-type", type=int, default=2, help="MAV_TYPE in the heartbeat (2 quad, 10 rover, 12 sub)")
     ap.add_argument("--compid", type=int, default=1)
     ap.add_argument("--fault", default="")
     ap.add_argument("--params", type=int, default=0, help="total parameter count (default ~400)")
