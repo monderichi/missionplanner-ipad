@@ -163,7 +163,7 @@ class Vehicle:
             if n % 10 == 5:
                 # two fake aircraft circling HOME (ADSB_VEHICLE)
                 for icao, call, radius, alt_m, speed, phase in (
-                        (0xABC123, b"TEST123", 800.0, 300.0, 60.0, 0.0),
+                        (0xABC123, b"TEST123", 180.0, 300.0, 15.0, 0.0),  # close enough to appear on the default map zoom
                         (0x4CA1F2, b"SKY42", 1500.0, 900.0, 120.0, 2.0)):
                     omega = speed / radius  # rad/s, counter-clockwise
                     ang = phase + omega * t

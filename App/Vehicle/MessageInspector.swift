@@ -23,6 +23,9 @@ final class MessageInspector: ObservableObject {
 
     private var table: [String: InspectorEntry] = [:]
     private var lastCounts: [String: Int] = [:]
+    /// (time, cumulative count) samples per key over the last window seconds.
+    private var history: [String: [(Date, Int)]] = [:]
+    static let window: TimeInterval = 5
     private var lastTick = Date()
     private var dirty = false
     private var timer: Timer?
@@ -49,6 +52,7 @@ final class MessageInspector: ObservableObject {
     func clear() {
         table = [:]
         lastCounts = [:]
+        history = [:]
         entries = []
         dirty = false
     }
@@ -59,13 +63,20 @@ final class MessageInspector: ObservableObject {
         guard dt > 0 else { return }
         lastTick = now
         // Rates decay even when nothing arrives, so refresh while any entry is still non-zero.
+        // Rate = messages received in the last `window` seconds / window (Mission Planner's
+        // inspector counts over a window too). An exponential average per 0.25 s tick read far too
+        // low for bursty streams (1 Hz heartbeats, batched attitude over ELRS).
         var anyActive = dirty
         for (key, entry) in table {
             var e = entry
-            let prev = lastCounts[key] ?? 0
-            let inst = Double(e.count - prev) / dt
-            lastCounts[key] = e.count
-            e.rate = e.rate == 0 ? inst : e.rate * 0.7 + inst * 0.3
+            var hist = history[key] ?? []
+            hist.append((now, e.count))
+            while let first = hist.first, now.timeIntervalSince(first.0) > Self.window { hist.removeFirst() }
+            history[key] = hist
+            if let first = hist.first, let last = hist.last, last.0 > first.0 {
+                let span = max(last.0.timeIntervalSince(first.0), 1)
+                e.rate = Double(last.1 - first.1) / span
+            }
             if e.rate < 0.01 { e.rate = 0 }
             if e.rate > 0 { anyActive = true }
             table[key] = e
