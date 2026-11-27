@@ -190,3 +190,21 @@ Phases 4–7 from `CLAUDE_PROMPTS.md`: map upgrades (trail, offline tiles), the 
 (MISSION_ITEM_INT up/download), setup/calibration wizards, and tlog replay. Multi-vehicle (MAVList)
 is still single-vehicle. With ELRS, keep in mind the link is narrow (1:2 telemetry ratio): use
 `.narrowLink` configs, and don't raise the stream rates much.
+
+## UGV / ROV batch (2026-11-27)
+
+- `4aeb00b` (sim run 17) + `87c6a3f`: ArduRover and ArduSub support. Setup pages are filtered per firmware
+  (`SetupPage.applies(to:)`), with a Rover setup page (cruise, steering, failsafe) and an ROV setup page (depth,
+  water temperature, leak + clear, FRAME_CONFIG, JS_GAIN_*). Per-firmware failsafe/tuning lists, plus rover/boat
+  map markers.
+- Manual control (`App/Control/ManualControl.swift`, Control tab): MANUAL_CONTROL at 10 Hz, opt-in per session,
+  turns off when the link is lost. The source is a game controller (GameController) or the on-screen sticks.
+  - Sub: x forward, y lateral, z 0..1000 (500 = neutral), r yaw.
+  - Rover: y = steering, z = throttle (−1000..1000), checked against ArduRover source.
+  - The simulator reports a "Gamepad", so the "Use game controller" toggle (`manual.useGamepad`) is set to NO in
+    the sim shots.
+- `tools/fake_vehicle.py --type copter|rover|boat|sub`; `tools/audit_params.py` checks the parameter names used by
+  the setup pages against the metadata. The sim runs shots 30–34 (rover) and 40–43 (sub), and copies the tlogs
+  after all passes.
+- Still TODO: real-iPad / real-vehicle testing of manual control (never sent to a real rover/sub), PlannerSettings
+  units in the screens.
