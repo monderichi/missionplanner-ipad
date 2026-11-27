@@ -96,3 +96,6 @@ The user's original request is kept verbatim at the end; the version below is th
   same failures/crashes as before the pull (all reported bugs still present), plus manual_control_rover/sub FAIL = BUG-038 NaN
   check (expected), sitl_lossy_b FAIL = BUG-033, sitl_lossy and sitl_lossy_c passed this time (BUG-033 is intermittent).
   Long UI session still running (631 s: 32 % CPU, RSS 367.7 MB, rising). Usage limit hit again; NEXT steps unchanged (see 00:36 entry).
+- 00:57 Long UI session (30 min, normal rates) done: avg 30 % CPU; RSS 327 → 383 MB in the first 15 min, then flat
+  (378–388 MB): warm-up growth (map tiles/trail/history buffers), no steady leak. Record under BUG-037 (CPU) in section 8.
+  Usage limit hit again; NEXT unchanged (00:36 entry, starting at item 2: catalyst.sh build + UI classes 3/2/1).
