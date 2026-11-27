@@ -80,6 +80,19 @@ S = {
     "blackout": dict(drone=["--udp-out", "127.0.0.1:14560"], harness=["--kind", "udpListen", "--port", "14550"],
                      proxy=["--listen", "14560", "--blackout", "4:8"], name="link_loss_proxy"),
     "servo_before_params": dict(drone=TCP + ["--params", "3000", "--param-burst", "1"]),
+    "esc_telemetry": dict(drone=TCP),
+    "prearm_check": dict(drone=TCP + ["--fault", "reject_arm"]),
+    "accel_cal": dict(drone=TCP),
+    "accel_cal_fail": dict(drone=TCP + ["--fault", "accelcal_fail"], harness=H_TCP + ["--expect", "failed"], name="accel_cal"),
+    "accel_cal_lossy": dict(drone=["--udp-out", "127.0.0.1:14560"], harness=["--kind", "udpListen", "--port", "14550", "--timeout", "60"],
+                            proxy=["--listen", "14560", "--loss", "25", "--seed", "3"], name="accel_cal"),
+    "accel_cal_lossy_retap": dict(drone=["--udp-out", "127.0.0.1:14560"], harness=["--kind", "udpListen", "--port", "14550", "--timeout", "90", "--retap", "1"],
+                                  proxy=["--listen", "14560", "--loss", "25", "--seed", "3"], name="accel_cal"),
+    "compass_cal": dict(drone=TCP),
+    "compass_cal_fail": dict(drone=TCP + ["--fault", "magcal_fail"], harness=H_TCP + ["--expect", "failed"], name="compass_cal"),
+    "geofence_apply": dict(drone=TCP),
+    "fence_breach": dict(drone=TCP),
+    "motor_test": dict(drone=TCP),
     "long_session": dict(drone=TCP, harness=H_TCP + ["--secs", "300"], long=True),
     "sitl_smoke": dict(sitl=True, harness=["--kind", "tcp", "--port", "5760"], long=True),
     "sitl_params": dict(sitl=True, harness=["--kind", "tcp", "--port", "5760", "--param-timeout", "90"], name="params", long=True),
@@ -93,6 +106,9 @@ PROBES = ["probe:accelcal_nan", "probe:accelcal_neg", "probe:accelcal_huge", "pr
           "probe:elrs_backpack_json"]
 for p in PROBES:
     S[p] = dict(drone=None)
+# fuzzing (known crash 76 = COMMAND_LONG/ACCELCAL skipped in the second run so other crashes can surface)
+S["probe:fuzz_pipeline"] = dict(drone=None, harness=["--iterations", "300000"])
+S["probe:fuzz_pipeline_skip_known"] = dict(drone=None, harness=["--iterations", "300000", "--skip", "76,39"], name="probe:fuzz_pipeline")
 
 
 def harness_bin():

@@ -45,13 +45,13 @@ install, the Files app, speech output, real sensor calibration, real flight.
 (model: none). Python 3.9.6 (stdlib only). Vehicles: scripted fake ArduCopter (all runs) + fault proxy; ArduCopter 4.7.3
 SITL scripted but **not run** (see section 6: the source download had not finished when the session ended).
 
-**What was tested.** 71 scenario/probe runs through the real app link/vehicle/store code, plus the unit suite.
+**What was tested.** 84 scenario/probe runs (+ 8 re-runs under Thread Sanitizer) through the real app link/vehicle/store code, plus the unit suite.
 
 | Suite | Result |
 |---|---|
 | Existing MAVLinkKit unit tests (34) | **34 pass, 0 fail** |
 | New unit tests (`testing/unit/extra`, 8) | 4 coverage tests pass; 4 regression tests **fail as intended** (BUG-002, -007, -020) |
-| Scenarios + probes (71) | **39 PASS, 16 FAIL, 16 CRASH** (a crash = the app process would die) |
+| Scenarios + probes (84) | **46 PASS, 20 FAIL, 18 CRASH** (a crash = the app process would die) |
 
 Full verdict list: `testing/logs/summary.txt` after a run; the table in section 5 maps every TESTING.md item.
 
@@ -227,11 +227,13 @@ simulator for the UI part.
   `… greater than Int32.max`. Any latitude ≥ 214.75 traps; 90 < lat < 214 is silently accepted (BUG-007 unit test).
 - **Cause** `Packages/MAVLinkKit/Sources/MAVLinkKit/MissionProtocol.swift:89-90` (init) and `:97`, `:102` (setters):
   `Int32((latitude * 1e7).rounded())`. `WaypointFile.parse` (`:363-374`) accepts any `Double`. `App/UI/PlanView.swift:345-346`
-  binds free-text fields straight to the setters.
+  binds free-text fields straight to the setters. Also `MissionProtocol.swift:117` `MissionItem(_ m: MAV.MissionItem)`: a
+  vehicle answering with a legacy MISSION_ITEM whose x/y are NaN or ≥ 214.75 traps (found by `probe_fuzz_pipeline.sh`).
+  Its x/y for non-location commands are param5/param6, so scaling them by 1e7 also corrupts those values.
 - **Fix** In MAVLinkKit, validate in `WaypointFile.parse` (`throw .badLine(n)` for non-finite, |lat| > 90, |lon| > 180; a
   frame-0/home line with 0,0 is fine) and make the setters non-trapping (`Int32(exactly:)`/clamp, or a failable API). In
   PlanView, validate before writing back and show an error.
-- **Accept** All four probes PASS; `test_BUG007_*` passes; a new unit test `WaypointFile.parse("…nan…")` throws `badLine(2)`.
+- **Accept** All four probes and `probe_fuzz_pipeline.sh` PASS; `test_BUG007_*` passes; a new unit test `WaypointFile.parse("…nan…")` throws `badLine(2)`.
 
 ### BUG-008: Low battery and failsafes have no visual warning; with speech off there is no alert at all
 - **Severity** High · **Category** safety, UX · **Verdict** CODE + CONFIRMED (values reach the model)
@@ -306,7 +308,7 @@ simulator for the UI part.
 - **Cause** `App/UI/ConnectView.swift:113` (Disconnect), `:117` (Reconnect), `:134` and `:149` (`link.startReplay`), and
   `LinkManager.startReplay` calls `disconnect()` first (`App/Link/LinkManager.swift:80`).
 - **Fix** If `vehicle.armed && vehicle.heartbeatAlive`, show a destructive confirmation before these four actions.
-- **Accept** XCUITest (once identifiers exist, see TEST-027): with an armed fake vehicle, tapping Disconnect shows an alert
+- **Accept** XCUITest (once identifiers exist, see TEST-031): with an armed fake vehicle, tapping Disconnect shows an alert
   and Cancel keeps the link up.
 
 ### BUG-014: The Servo tab's "motor outputs are blocked" guard is fail-open until parameters have downloaded
@@ -384,7 +386,56 @@ simulator for the UI part.
 - **Fix** `guard let v = Float(valueText), v.isFinite`; in `differences`, treat both-NaN as equal.
 - **Accept** `test_BUG020_*` passes; both scenarios PASS.
 
-### BUG-021: ExpressLRS backpack answers with port 0 or `enabled:false` are used as-is
+### BUG-021: Accelerometer calibration stalls on a lossy link (single unrepeated confirm/result, no timeout, no feedback)
+- **Severity** Medium · **Category** UX (ELRS) · **Verdict** CONFIRMED against the fake vehicle; ArduPilot's resend behaviour to be
+  confirmed with SITL (`sitl_accel_cal` once SITL is built)
+- **Repro** `testing/scenarios/accel_cal_lossy.sh` (25 % loss; user taps once per position) and `accel_cal_lossy_retap.sh`
+  (user taps again every 6 s). The fake vehicle re-requests the position every second, as ArduPilot does.
+- **Expected** The calibration finishes on a 25 % lossy link, or tells the user to tap again / retry.
+- **Actual** Clean link: PASS in 7 s (`accel_cal.sh`). Lossy, one tap per position: stuck on "Level" for 60 s. A lost
+  confirm is never resent, and the banner shows "Level done…" as if it had worked. Lossy with retaps: reaches position 6,
+  then stays there forever because the single success COMMAND_LONG (16777215) was lost, and later taps are ignored.
+- **Cause** `App/Vehicle/CalibrationStore.swift:66-69` (`sendOnce`, deliberately not retried, so nothing checks for progress);
+  `:77-85` (`.success`/`.failed` only from COMMAND_LONG 42429); `.starting` has no timeout (`App/UI/SetupView.swift:231-233`).
+- **Fix** After a confirm, if the vehicle still requests the *same* position after 2 s, resend the confirm (this is safe:
+  ArduPilot ignores a confirm for a position it isn't waiting for). Also treat the STATUSTEXT "Calibration successful" /
+  "Calibration FAILED" as the result (Mission Planner does this). Add a 30 s timeout in `.starting`/`.place` with
+  "No answer: tap to retry".
+- **Accept** `accel_cal_lossy.sh` and `accel_cal_lossy_retap.sh` PASS (calibration ends successful within 60 s).
+
+### BUG-022: The geofence page applies an altitude limit below the current altitude while flying, with no warning
+- **Severity** Medium · **Category** safety · **Verdict** CONFIRMED (same writes as the page, sent through `ParameterStore`)
+- **Repro** `testing/scenarios/fence_breach.sh` (take off to 40 m, apply 20 m with the page's writes).
+- **Expected** While armed, refuse a limit below the current altitude (or confirm: "Vehicle is at 26 m; a 20 m fence breaches
+  immediately and triggers RTL/Land"). Also show the breach prominently (see BUG-008).
+- **Actual** FENCE_ALT_MAX = 20, FENCE_ENABLE = 1 are written at 26 m with no prompt, and the vehicle breaches at once
+  (mode → RTL/Land, "Fence Breach" only in Messages). D7 on the bench and the G4 action itself work (`geofence_apply.sh` PASS).
+- **Cause** `App/UI/SetupView.swift:590-596` (`limitAltitude`, no armed/altitude check); the button is only disabled outside
+  10–1000 m (`:565`).
+- **Fix** If `vehicle.armed`, require `quickAlt > vehicle.relativeAltitude + 10` or a destructive confirmation.
+- **Accept** `fence_breach.sh` PASS (its last check flips once the page has a guard; move the guard into a testable function
+  that the scenario calls).
+
+### BUG-032: Data race: `disconnect()` clears transport callbacks on main while the transport queue calls them
+- **Severity** Medium · **Category** crash (concurrency) · **Verdict** CONFIRMED with Thread Sanitizer
+- **Repro** `HARNESS_SANITIZE=thread TSAN_OPTIONS="halt_on_error=0 exitcode=0" python3 testing/scenarios/run.py connect_spam replay`
+  then `grep -A12 "ThreadSanitizer: data race" testing/logs/connect_spam.harness.log`.
+- **Expected** No races; a callback is either delivered completely or not at all after Disconnect.
+- **Actual** 2 races in `connect_spam` and 2 in `replay`: "Write of size 8 by main thread: NWClientTransport.onReceive.setter
+  ← LinkManager.disconnect() LinkManager.swift:188 / Previous read by GCD worker: NWClientTransport.receive
+  NetworkTransports.swift:230", and the same for `ReplayTransport.step()` ReplayTransport.swift:158 (via
+  `LinkManager.startReplay` → `disconnect()`). Swift closures are 16-byte values, so a torn read can call a freed context
+  (a rare crash when tapping Disconnect, Reconnect or a replay during heavy traffic). The other 6 scenarios run under TSan
+  (connect, UDP link loss, TCP drop, mid-transfer disconnect, 30 % lossy link, reboot) were race-free.
+- **Cause** `App/Link/LinkManager.swift:188-189` mutates `onReceive`/`onStateChange` from main; the transports read them on
+  their own queues (`NetworkTransports.swift:230` TCP, `:216` UDP, `ReplayTransport.swift:158`); `UDPListenTransport` (`:76`) uses
+  the same pattern.
+- **Fix** Let each transport own its callbacks behind its queue: `close()` clears them with `queue.sync`/`queue.async`
+  before cancelling, and `LinkManager` stops touching the properties. Alternatively, protect them with a lock. Keep the
+  generation check that already drops late callbacks.
+- **Accept** The repro above reports 0 races for `connect_spam`, `replay`, `tcp_drop` and `disconnect_mid_transfer`.
+
+### BUG-023: ExpressLRS backpack answers with port 0 or `enabled:false` are used as-is
 - **Severity** Low · **Category** UX · **Verdict** CONFIRMED (decoder)
 - **Repro** `testing/scenarios/probe_elrs_backpack_json.sh`.
 - **Actual** `{"ports":{"listen":0,"send":0}}` → the app connects to 10.0.0.1:0 from iPad port 0. With `enabled:false` it
@@ -394,21 +445,21 @@ simulator for the UI part.
   Telemetry = WiFi")`.
 - **Accept** The probe PASS.
 
-### BUG-022: Out-of-range port text is silently replaced by the default port
+### BUG-024: Out-of-range port text is silently replaced by the default port
 - **Severity** Low · **Category** UX · **Verdict** CODE
 - **Repro** Simulator: Connect › TCP › port `70000` › Connect → connects to 5760 without a word.
 - **Cause** `App/UI/ConnectView.swift:119-120` (`UInt16(portText) ?? kind.defaultPort`).
 - **Fix** Validate (1–65535) and disable Connect with an inline error.
 - **Accept** XCUITest: entering 70000 disables Connect.
 
-### BUG-023: "Telemetry lost" is spoken on a deliberate Disconnect, and speech also runs during replay
+### BUG-025: "Telemetry lost" is spoken on a deliberate Disconnect, and speech also runs during replay
 - **Severity** Low · **Category** UX · **Verdict** CODE
 - **Cause** `App/Link/LinkManager.swift:197` (`vehicle.tick(now: .distantFuture)` flips `heartbeatAlive`) +
   `App/Vehicle/SpeechAlerts.swift:34`; `SpeechAlerts` doesn't know about `isReplaying`.
 - **Fix** Suppress link alerts on user disconnect; mute (or prefix "Replay:") during replay.
 - **Accept** Unit test with a stub synthesiser: disconnect produces no "Telemetry lost".
 
-### BUG-024: A failed replay keeps the previous log's name, packet count and duration in the replay bar
+### BUG-026: A failed replay keeps the previous log's name, packet count and duration in the replay bar
 - **Severity** Low · **Category** UX · **Verdict** CONFIRMED
 - **Repro** `testing/scenarios/replay.sh`: after `garbage.tlog`, `state=Failed: No MAVLink packets … loaded=true
   packets=607 dur=6.04` (values from the previous file).
@@ -417,14 +468,33 @@ simulator for the UI part.
 - **Fix** Reset the controller at `open()`. On failure set `isReplaying = false` (hide the ReplayBar) and show the error.
 - **Accept** `replay.sh` adds a check that `replay.loaded == false` after the garbage file (PASS).
 
-### BUG-025: A pending-command banner ("Arming…") can stay forever after the sessions re-attach or detach
+### BUG-027: A pending-command banner ("Arming…") can stay forever after the sessions re-attach or detach
 - **Severity** Low · **Category** UX · **Verdict** CODE
 - **Cause** `App/Vehicle/CommandCenter.swift:20-29`: `attach`/`detach` replace the session without resolving `lastResult`,
   so the timeout event never fires.
 - **Fix** In `attach`/`detach`, set `lastResult = "…: link changed, not confirmed"` for pending commands.
 - **Accept** Unit test: `arm()`, then `attach()` with a new compid, sets `lastResultOK == false` with a message.
 
-### TEST-026: The app layer has no tests, CI runs only MAVLinkKit, and there are no UI tests
+### BUG-028: A failed compass shows 100 % progress
+- **Severity** Low · **Category** UX · **Verdict** CONFIRMED
+- **Repro** `testing/scenarios/compass_cal_fail.sh` (compass 2 fails at 60 %).
+- **Actual** `progress=[0: 100, 1: 100]`. The red "Failed" text appears under a full green bar.
+- **Cause** `App/Vehicle/VehicleModel.swift:374` sets the progress to 100 for any MAG_CAL_REPORT.
+- **Fix** Set 100 only when `calStatus == 4` (success); otherwise keep the last value and colour the bar red.
+- **Accept** `compass_cal_fail.sh` PASS.
+
+### BUG-029: Radio calibration samples RC at 1 Hz on narrow links, so the stored min/max can be too narrow
+- **Severity** Low · **Category** data · **Verdict** CODE
+- **Repro** Simulator, ExpressLRS or BLE link (narrow stream rates): Setup › Radio › Calibrate, then sweep the sticks quickly.
+  The extremes are often missed between 1 Hz samples, and RCn_MIN/MAX are written too narrow.
+- **Cause** `App/Link/LinkManager.swift:41-44` (`rcChannels: 1` Hz on narrow links); `App/UI/SetupView.swift:364-370` samples
+  whatever arrives; the page doesn't raise the rate.
+- **Fix** While capturing, send SET_MESSAGE_INTERVAL(RC_CHANNELS, 10 Hz) (5 Hz on ELRS) and restore it on Save/Cancel. Show
+  the sample rate and ask the user to hold each extreme for 1 s.
+- **Accept** A harness test with the fake drone (RC_CHANNELS rate follows SET_MESSAGE_INTERVAL) captures the full
+  1000–2000 range from a 0.5 Hz sweep.
+
+### TEST-030: The app layer has no tests, CI runs only MAVLinkKit, and there are no UI tests
 - **Severity** Medium · **Category** test gap
 - **Details** `LinkManager`, `VehicleModel`, the stores and every view are untested. All bugs above except BUG-002/-007/-010/
   -016/-019/-020 live there. CI (`.github/workflows/build-sideloadly-ipa.yml`) runs `swift test` for MAVLinkKit only.
@@ -435,7 +505,7 @@ simulator for the UI part.
   (4) Add an XCUITest target in `project.yml` covering connect, arm-confirm, mode buttons and the banners.
 - **Accept** CI runs the harness scenarios and fails on any CRASH; the XCUITest target runs on `iPad Pro 13-inch (M4)`.
 
-### TEST-027: The UI has no accessibility identifiers, so XCUITest can't drive it reliably
+### TEST-031: The UI has no accessibility identifiers, so XCUITest can't drive it reliably
 - **Severity** Low · **Category** testability (tiny change, listed instead of made, per the ground rules)
 - **Fix** Add `.accessibilityIdentifier` to: Connect/Disconnect/Reconnect buttons and link-kind picker (`ConnectView`),
   Arm/Disarm/Force-disarm/mode buttons/Takeoff (`ActionsView`), HUD banners (`HUDView`: "banner.noHeartbeat",
@@ -479,10 +549,10 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
 | A1 Install, landscape, Connect sheet | needs an iPad/Sideloadly; no simulator | N/T (no Xcode) |
 | A2 Diagnostics version/build | UI; build stamp comes from CI | N/T (no Xcode) |
 | A3 Documents folders | harness: `DocumentsStore` creates logs/params/missions/tiles | PASS |
-| B1 Connect, firmware/mode/GPS shown | `connect`, `connect_udp_listen`, `connect_udp_connect` | PASS. ELRS kind N/T (Wi-Fi-only + real 10.0.0.1 backpack); backpack JSON → BUG-021 |
+| B1 Connect, firmware/mode/GPS shown | `connect`, `connect_udp_listen`, `connect_udp_connect` | PASS. ELRS kind N/T (Wi-Fi-only + real 10.0.0.1 backpack); backpack JSON → BUG-023 |
 | B2 HUD moves, no NO ATTITUDE banner | `connect` (attitude flowing, not stale); HUD drawing N/T | PARTIAL; NaN/Inf → BUG-003 |
 | B3 Values plausible | `connect` vs fake drone truth | PASS |
-| B4 ESC telemetry | fake drone doesn't emit ESC_TELEMETRY | NOT TESTED |
+| B4 ESC telemetry | `esc_telemetry` (4 ESCs, 0 RPM disarmed, RPM + temperature armed) | PASS |
 | B5 Link drop banner + voice | `link_loss`, `link_loss_udp`, `blackout` PASS; `tcp_drop` FAIL; voice N/T | FAIL → BUG-001 |
 | B6 Heartbeat sources, message counts | `connect` | PASS |
 | C1 Download all params | `params` (400), `params_1500`, `lossy_link` (30 % loss: 9.5 s) | PASS |
@@ -490,13 +560,13 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
 | C3 Write + confirm + set back | `param_set` | PASS |
 | C4 Options/bitmask metadata | `params` (metadata loaded); editor UI N/T | PARTIAL |
 | C5 Load file → 0 differ | `param_file_roundtrip` PASS; NaN case FAIL | FAIL → BUG-020 |
-| D1 Pre-arm checks | `reject_arm` (PreArm text reaches Messages); the "Run pre-arm checks" button N/T | PARTIAL |
-| D2 Accelerometer calibration | crash path only (`accelcal_live_nan`); normal 6-position flow not simulated | FAIL → BUG-009 |
-| D3 Compass calibration | fake drone has no MAG_CAL_PROGRESS | NOT TESTED |
-| D4 Radio calibration | UI only | N/T (no Xcode) |
+| D1 Pre-arm checks | `prearm_check` (MAV_CMD_RUN_PREARM_CHECKS accepted, PreArm text in Messages), `reject_arm` | PASS (button UI N/T) |
+| D2 Accelerometer calibration | `accel_cal` PASS (positions 1–6, success), `accel_cal_fail` PASS; `accel_cal_lossy(_retap)` FAIL; `accelcal_live_nan` CRASH | FAIL → BUG-009, BUG-021 |
+| D3 Compass calibration | `compass_cal` PASS (progress, reports, accept); `compass_cal_fail` FAIL | PASS (UX: BUG-028) |
+| D4 Radio calibration | UI only; code review of the capture/save logic | N/T (no Xcode); BUG-029 |
 | D5 Flight modes page | `probe_fltmode_ch0`, `param_nan` | FAIL → BUG-005 |
-| D6 Motor test | UI; code reviewed (props-off toggle, disabled when armed: OK) | N/T (no Xcode) |
-| D7 Geofence altitude | code reviewed; not driven end to end | NOT TESTED |
+| D6 Motor test | `motor_test` (single and sequence MAV_CMD_DO_MOTOR_TEST accepted); props-off toggle + armed guard by code review | PARTIAL (UI N/T) |
+| D7 Geofence altitude | `geofence_apply` (page's writes: FENCE_ALT_MAX 60, ENABLE 1, TYPE bit 0) | PASS |
 | D8 Battery monitor calibration | code review | FAIL → BUG-018 |
 | D9 DataFlash list/download | `log_download` | PASS (memory: BUG-019) |
 | E1 Offline map download | MapKit/UIKit + internet tile servers | N/T |
@@ -510,11 +580,11 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
 | F2 Quick mode + banner | `mode_change` PASS (incl. 3-tap spam); `no_ack` FAIL | FAIL → BUG-017 |
 | F3 Arm/disarm + refusal | `arm_disarm`, `reject_arm` PASS; confirmation dialogs present (code) | PASS (lossy-link caveat: BUG-002) |
 | F4 Servo override, motors greyed | `servo_before_params` | FAIL → BUG-014 |
-| F5 Replay, play/pause, seek, speed | `replay` (+ garbage/empty files) | PASS (BUG-024) |
+| F5 Replay, play/pause, seek, speed | `replay` (+ garbage/empty files) | PASS (BUG-026) |
 | G1 Manual flight, trail | simulated in `auto_mission` (trail drawn) | PARTIAL (no real flight) |
 | G2 Auto mission, current WP | `auto_mission` (waypoints reached, RTL, land, disarm) | PASS (simulated) |
 | G3 Fly here | `fly_here` (vehicle flies there; rejection mis-reported) | FAIL → BUG-011 |
-| G4 Altitude fence breach | fake drone has no fence logic; SITL run pending | NOT TESTED |
+| G4 Altitude fence breach | `fence_breach` (breach → RTL/Land shown, message logged) | PASS (simulated); applying in flight → BUG-022 |
 | G5 Share report + log | tlog recorded (`connect`); share sheet N/T | PARTIAL |
 
 | Extra area | Scenarios | Status |
@@ -539,6 +609,8 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
 | Large mission | `large_mission` (700 items, 0.1 s each way) | PASS |
 | Input validation (files, fields) | `probe_*` | FAIL → BUG-006, -007, -010, -020 |
 | Backgrounding, rotation, memory warning | iOS lifecycle | N/T (no Xcode) |
+| Fuzzing (random valid-CRC frames, all 349 ids, NaN/Inf-biased floats, random sysids) | `probe_fuzz_pipeline.sh` (300k frames), `probe_fuzz_pipeline_skip_known.sh` (3 × 300k, skipping ids 76/39) | CRASH on ids 76 (BUG-009) and 39 (BUG-007); no other traps in 900k frames; out-of-range values stored (BUG-003/-004) |
+| Data races (Thread Sanitizer) | 8 network/replay scenarios with `HARNESS_SANITIZE=thread` | FAIL → BUG-032 (4 reports in 2 scenarios) |
 | Existing tests | `testing/unit/run_unit_tests.sh` | PASS 34/34 |
 
 ---
@@ -555,11 +627,9 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
   large download), so no SITL results are reported; the partial download was deleted to free disk space. Once built, run `python3 testing/scenarios/run.py sitl`. `sitl_arm` also
   checks the in-flight disarm refusal and DO_SET_SERVO on a motor output against real ArduPilot.
 - **ExpressLRS link type**: it is Wi-Fi-only (`requiredInterfaceType = .wifi`), so it can't run over loopback, and the
-  ground rules forbid binding a fake backpack to a LAN interface. The backpack JSON handling was probed offline (BUG-021).
+  ground rules forbid binding a fake backpack to a LAN interface. The backpack JSON handling was probed offline (BUG-023).
 - **BLE transport, Local Network permission, speech output, Files app, share sheets**: platform/hardware features with no
-  simulator-free equivalent. Speech *triggers* were code-reviewed (BUG-008, BUG-023).
-- **ESC telemetry (B4), compass calibration (D3), accel calibration happy path (D2), geofence breach (G4)**: the fake drone
-  doesn't model them. SITL covers D3/G4. These are the next additions for `fake_drone.py`.
+  simulator-free equivalent. Speech *triggers* were code-reviewed (BUG-008, BUG-025).
 - **Real flight (G1–G5)**: out of scope; G1–G3 were simulated with the fake drone's kinematics.
 
 ---
@@ -575,3 +645,8 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
 - Re-runs after fixing two test-kit bugs (flood fault never fired; `link_loss_proxy` missing): statustext_flood PASS,
   blackout PASS; new: servo_before_params FAIL, waypoint_editor_lat_300 CRASH, elrs_backpack_json FAIL.
 - long_session (300 s) PASS: RSS 32.2 → 32.5 MB, no growth trend.
+- Round 2 (fake drone now models ESC telemetry, onboard compass cal, 6-position accel cal with 1 Hz re-requests, pre-arm
+  check, motor test, altitude fence): 11 scenarios, 7 PASS, 4 FAIL → BUG-021, BUG-022, BUG-028 (+ BUG-029 by code review).
+- Fuzzing: in-process fuzzer (`testing/harness/Sources/Fuzz.swift`) through the real VehicleModel/stores routing: crashes on
+  COMMAND_LONG (BUG-009) and legacy MISSION_ITEM (added to BUG-007); 900k further frames without a trap.
+- Thread Sanitizer build (`HARNESS_SANITIZE=thread`): data races on transport callbacks → BUG-032.

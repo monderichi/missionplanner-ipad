@@ -18,10 +18,13 @@ let package = Package(name: "Harness", platforms: [.macOS(.v13)],
                               path: "Sources/Harness", swiftSettings: [.unsafeFlags(["-swift-version", "5"])])])
 PKGEOF
 cd "$PKG"
-if ! swift build ${HARNESS_CONFIG:+-c $HARNESS_CONFIG} > "$ROOT/testing/logs/harness_build.log" 2>&1; then
+# HARNESS_SANITIZE=thread|address builds a sanitizer variant in its own scratch dir
+SAN=()
+if [[ -n "${HARNESS_SANITIZE:-}" ]]; then SAN=(--sanitize="$HARNESS_SANITIZE" --scratch-path "$PKG/.build-$HARNESS_SANITIZE"); fi
+if ! swift build ${HARNESS_CONFIG:+-c $HARNESS_CONFIG} ${SAN[@]+"${SAN[@]}"} > "$ROOT/testing/logs/harness_build.log" 2>&1; then
   echo "HARNESS BUILD FAILED (testing/logs/harness_build.log):"; grep -E "error:" "$ROOT/testing/logs/harness_build.log" | sed 's/\x1b\[[0-9;]*m//g' | head -20; exit 2
 fi
-BIN="$(swift build ${HARNESS_CONFIG:+-c $HARNESS_CONFIG} --show-bin-path)"
+BIN="$(swift build ${HARNESS_CONFIG:+-c $HARNESS_CONFIG} ${SAN[@]+"${SAN[@]}"} --show-bin-path)"
 cp "$ROOT/App/Resources/MissionCommands.json" "$BIN/"
 mkdir -p "$BIN/ParamMeta"; cp "$ROOT"/App/Resources/ParamMeta/*.json "$BIN/ParamMeta/"
 echo "$BIN/Harness"

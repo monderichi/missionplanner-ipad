@@ -11,7 +11,7 @@ Faults (--fault NAME[,NAME...] at start, or at runtime: echo "fault NAME on|off"
   reject_arm reject_mode no_ack slow_ack silent hb_only malformed dup reorder disconnect_on_arm
   disconnect_on_takeoff reboot_on_arm second_vehicle other_gcs compid_switch accelcal_nan accelcal_neg
   statustext_flood param_nan fltmode_ch0 mode_change_mid_mission v1_only high_rate wrong_sysid_ack
-  ack_wrong_command
+  ack_wrong_command accelcal_fail magcal_fail no_esc
 
 Control port commands (UDP text, default 127.0.0.1:17001): "fault NAME on|off", "silent N" (go silent N s),
 "reboot", "status" (prints state to stdout), "quit".
@@ -118,6 +118,9 @@ class Drone:
         self.flood_until = 0
         self.mid_mission_switched = False
         self.compid_switched = False
+        self.accel_step = 0          # 0 = idle, 1..6 = waiting for that position
+        self.magcal = None           # dict(start=t, pct={0:..,1:..}) while running
+        self.fence_breached = False
 
     # ---------------- transport ----------------
     def setup(self):
@@ -264,6 +267,28 @@ class Drone:
             ch = [1500] * 18
             ch[4] = 1300  # mode switch position 2
             self.send("RC_CHANNELS", chancount=16, **{f"chan{i + 1}_raw": ch[i] for i in range(18)}, rssi=200)
+        if "no_esc" not in f and self.due("ESC_TELEMETRY_1_TO_4", 1, now):
+            rpm = [9000 + 150 * i if self.armed else 0 for i in range(4)]
+            self.send("ESC_TELEMETRY_1_TO_4", rpm=rpm, temperature=[31, 32, 33, 34], voltage=[int(self.battery * 100)] * 4,
+                      current=[350 if self.armed else 0] * 4, totalcurrent=[10] * 4, count=[1] * 4)
+        if self.accel_step and self.due("ACCELPOS", 1, now):  # ArduPilot re-requests the position every second
+            self.send("COMMAND_LONG", command=42429, param1=float(self.accel_step), target_system=255, target_component=190)
+        if self.magcal and self.due("MAG_CAL_PROGRESS", 4, now):
+            el = now - self.magcal["start"]
+            for cid in (0, 1):
+                pct = min(100, int(el * (12 if cid == 0 else 10)))
+                if "magcal_fail" in f and cid == 1:
+                    pct = min(pct, 60)
+                self.send("MAG_CAL_PROGRESS", compass_id=cid, cal_mask=3, cal_status=3 if pct < 100 else 4, attempt=1,
+                          completion_pct=pct)
+                if (pct >= 100 or ("magcal_fail" in f and cid == 1 and el > 9)) and cid not in self.magcal["done"]:
+                    self.magcal["done"].add(cid)
+                    ok = not ("magcal_fail" in f and cid == 1)
+                    self.send("MAG_CAL_REPORT", compass_id=cid, cal_mask=3, cal_status=4 if ok else 5, autosaved=1 if ok else 0,
+                              fitness=8.5 + cid, ofs_x=12.0, ofs_y=-30.0, ofs_z=55.0, diag_x=1, diag_y=1, diag_z=1, scale_factor=1)
+                    log(f"MAG_CAL_REPORT compass {cid} {'success' if ok else 'FAILED'}")
+            if len(self.magcal["done"]) == 2:
+                self.magcal = None
         if self.due("MISSION_CURRENT", self.rates.get("MISSION_CURRENT", 0), now):
             self.send("MISSION_CURRENT", seq=self.cur_wp)
         if "statustext_flood" in f and self.due("FLOOD", 10, now):  # 200 STATUSTEXT/s
@@ -344,6 +369,15 @@ class Drone:
         elif self.takeoff_alt is None and self.mode != 9:
             self.vn = self.ve = 0
             self.vz = 0
+        if (self.params.get("FENCE_ENABLE") == 1 and self.armed and not self.fence_breached
+                and self.alt > float(self.params.get("FENCE_ALT_MAX", 100)) and int(self.params.get("FENCE_TYPE", 0)) & 1):
+            self.fence_breached = True
+            self.takeoff_alt = None
+            self.target = None
+            action = int(self.params.get("FENCE_ACTION", 1))
+            self.mode = 9 if action == 2 else 6
+            self.statustext(0, "Fence Breach: altitude")  # EMERGENCY, as ArduPilot's breach message
+            log(f"FENCE BREACH at {self.alt:.1f} m -> {COPTER_MODES[self.mode]}")
         self.lat += self.vn * dt / 111_320
         self.lon += self.ve * dt / (111_320 * math.cos(math.radians(self.lat)))
         self.alt = max(0.0, self.alt + self.vz * dt)
@@ -566,7 +600,49 @@ class Drone:
         if cmd == 179:
             self.home = (self.lat, self.lon, self.home[2])
             return self.ack(cmd, MAV_RESULT_ACCEPTED)
-        if cmd in (178, 183, 209, 241, 42424, 42425, 42426, 42429, 181):
+        if cmd == 241 and m["param5"] == 1:  # 6-position accel cal
+            self.accel_step = 1
+            self.ack(cmd, MAV_RESULT_ACCEPTED)
+            self.statustext(6, "Place vehicle level and press any key.")
+            self.send("COMMAND_LONG", command=42429, param1=1.0, target_system=255, target_component=190)
+            return
+        if cmd == 42429:  # GCS confirms a position
+            if self.accel_step and int(m["param1"]) == self.accel_step:
+                if "accelcal_fail" in f and self.accel_step == 3:
+                    self.accel_step = 0
+                    self.statustext(2, "Calibration FAILED")
+                    self.send("COMMAND_LONG", command=42429, param1=16777216.0, target_system=255, target_component=190)
+                elif self.accel_step == 6:
+                    self.accel_step = 0
+                    self.statustext(6, "Calibration successful")
+                    self.send("COMMAND_LONG", command=42429, param1=16777215.0, target_system=255, target_component=190)
+                else:
+                    self.accel_step += 1
+                    self.send("COMMAND_LONG", command=42429, param1=float(self.accel_step), target_system=255,
+                              target_component=190)
+                log(f"accel cal -> step {self.accel_step}")
+            else:
+                log(f"accel cal: ignored position {m['param1']} (waiting for {self.accel_step})")
+            return self.ack(cmd, MAV_RESULT_ACCEPTED)
+        if cmd == 42424:
+            self.magcal = dict(start=time.time(), done=set())
+            return self.ack(cmd, MAV_RESULT_ACCEPTED)
+        if cmd == 42425:
+            self.statustext(6, "Compass calibration accepted")
+            return self.ack(cmd, MAV_RESULT_ACCEPTED)
+        if cmd == 42426:
+            self.magcal = None
+            return self.ack(cmd, MAV_RESULT_ACCEPTED)
+        if cmd == 401:
+            if "reject_arm" in f or "gps_loss" in f:
+                self.statustext(2, "PreArm: GPS: Bad fix" if "gps_loss" in f else "PreArm: Battery below minimum arming voltage")
+            return self.ack(cmd, MAV_RESULT_ACCEPTED)
+        if cmd == 209:
+            if self.armed:
+                return self.ack(cmd, MAV_RESULT_DENIED)
+            log(f"MOTOR TEST motor={int(m['param1'])} type={int(m['param2'])} thr={m['param3']} dur={m['param4']} count={int(m['param5'])}")
+            return self.ack(cmd, MAV_RESULT_ACCEPTED)
+        if cmd in (178, 183, 241, 181):
             return self.ack(cmd, MAV_RESULT_ACCEPTED)
         return self.ack(cmd, MAV_RESULT_UNSUPPORTED)
 

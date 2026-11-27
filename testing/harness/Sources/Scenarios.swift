@@ -18,6 +18,8 @@ enum Scenarios {
         "param_nan": paramNaN, "mode_change_mid_mission": modeChangeMidMission, "lossy_link": lossyLink,
         "compid_switch": compidSwitch, "long_session": longSession, "sitl_smoke": sitlSmoke,
         "link_loss_proxy": linkLossProxy, "sitl_arm": sitlArm, "servo_before_params": servoBeforeParams,
+        "esc_telemetry": escTelemetry, "prearm_check": prearmCheck, "accel_cal": accelCal, "compass_cal": compassCal,
+        "geofence_apply": geofenceApply, "fence_breach": fenceBreach, "motor_test": motorTest, "probe:fuzz_pipeline": Fuzz.run,
     ].merging(Probes.all, uniquingKeysWith: { a, _ in a })
 
     // MARK: B. connection
@@ -666,5 +668,124 @@ enum Scenarios {
         let blocked = Probes.servoIsMotor(c.link.params.params["SERVO1_FUNCTION"]?.value)
         c.check("motor output 1 override blocked while params still downloading", blocked || have,
                 "SERVO1_FUNCTION known=\(have) -> ServoView buttons enabled for Out 1")
+    }
+
+    // MARK: round 2 (B4, D1, D2, D3, D6, D7, G4)
+
+    static func escTelemetry(_ c: Ctx) {
+        guard c.connectAndWaitForVehicle() else { return }
+        c.pump(2)
+        c.check("B4 four ESCs shown", c.vehicle.escCount == 4, "escCount=\(c.vehicle.escCount)")
+        c.check("B4 0 RPM when disarmed, temperature shown", c.vehicle.escs.prefix(4).allSatisfy { $0.rpm == 0 && $0.temperature > 0 },
+                "\(c.vehicle.escs.prefix(4).map { "\($0.rpm)rpm/\($0.temperature)C" })")
+        c.link.commands.arm(true); c.waitUntil(5) { c.vehicle.armed }
+        c.pump(2.5)
+        c.check("B4 RPM when armed", c.vehicle.escs.prefix(4).allSatisfy { $0.rpm > 0 }, "\(c.vehicle.escs.prefix(4).map(\.rpm))")
+        c.note("ESC slots 5-8 after only 1-4 reported: \(c.vehicle.escs.suffix(4).map(\.rpm)) escCount=\(c.vehicle.escCount)")
+    }
+
+    static func prearmCheck(_ c: Ctx) {
+        guard c.connectAndWaitForVehicle() else { return }
+        c.link.calibration.runPrearmChecks()
+        c.waitUntil(5) { c.link.commands.pending.isEmpty }
+        c.pump(0.5)
+        c.check("D1 command accepted", c.link.commands.lastResultOK, c.link.commands.lastResult ?? "nil")
+        c.check("D1 PreArm reason shown", c.vehicle.messages.contains { $0.text.hasPrefix("PreArm") }, c.vehicle.messages.first?.text ?? "none")
+    }
+
+    static func accelCal(_ c: Ctx) {
+        guard c.connectAndWaitForVehicle() else { return }
+        c.pump(1)
+        c.link.calibration.startAccel()
+        var seen: [UInt32] = []
+        let t0 = Date()
+        let tapDelay = Double(c.args.extra["tap-delay"] ?? "0.5") ?? 0.5
+        while Date().timeIntervalSince(t0) < Double(c.args.extra["timeout"] ?? "40") ?? 40 {
+            c.pump(0.1)
+            switch c.link.calibration.accel {
+            case .place(let p):
+                if seen.last != p { seen.append(p); c.pump(tapDelay); c.link.calibration.confirmPosition() }
+                else if c.args.extra["retap"] != nil, Date().timeIntervalSince(t0) > Double(seen.count) * 6 {
+                    c.note("no progress on position \(p): user taps again"); c.link.calibration.confirmPosition(); c.pump(2)
+                }
+            case .success, .failed: break
+            default: continue
+            }
+            if c.link.calibration.accel == .success || c.link.calibration.accel == .failed { break }
+        }
+        c.metric("accel_cal_s", String(format: "%.1f", Date().timeIntervalSince(t0)))
+        let expectFail = c.args.extra["expect"] == "failed"
+        c.check("D2 asks positions 1-6 in order", expectFail ? seen == [1, 2, 3] : seen == [1, 2, 3, 4, 5, 6], "\(seen)")
+        c.check("D2 ends \(expectFail ? "failed" : "successful")", c.link.calibration.accel == (expectFail ? .failed : .success),
+                "\(c.link.calibration.accel) banner=\(c.link.commands.lastResult ?? "nil")")
+    }
+
+    static func compassCal(_ c: Ctx) {
+        guard c.connectAndWaitForVehicle() else { return }
+        c.link.calibration.startCompass()
+        let expectFail = c.args.extra["expect"] == "failed"
+        let done = c.waitUntil(20) { c.vehicle.magCalReports.count == 2 }
+        c.snapshot("magcal")
+        c.check("D3 progress reaches 100% on compass 1", c.vehicle.magCalProgress[0] == 100, "\(c.vehicle.magCalProgress)")
+        c.check("D3 reports for both compasses", done != nil, "\(c.vehicle.magCalReports.keys.sorted())")
+        let statuses = c.vehicle.magCalReports.values.map(\.calStatus).sorted()
+        c.check(expectFail ? "D3 failure reported" : "D3 success with fitness/offsets", expectFail ? statuses.contains(5) : statuses == [4, 4],
+                "status=\(statuses) fitness=\(c.vehicle.magCalReports.values.map(\.fitness))")
+        if expectFail {
+            c.note("UI shows progress=\(c.vehicle.magCalProgress) for a FAILED compass (VehicleModel.swift:374 sets 100 on any report)")
+            c.check("failed compass not shown as 100% complete", c.vehicle.magCalProgress[1] != 100, "\(c.vehicle.magCalProgress)")
+        }
+        c.link.calibration.acceptCompass()
+        c.waitUntil(5) { c.link.commands.pending.isEmpty }
+        c.check("D3 accept acknowledged", c.link.commands.lastResultOK, c.link.commands.lastResult ?? "nil")
+    }
+
+    /// Same writes as FencePage.limitAltitude (SetupView.swift:590-596).
+    static func fenceWrites(_ c: Ctx, alt: Float) -> [String: Float] {
+        var out: [String: Float] = ["FENCE_ALT_MAX": alt, "FENCE_ENABLE": 1]
+        let type = UInt32(max(0, c.link.params.params["FENCE_TYPE"]?.value ?? 0))
+        out["FENCE_TYPE"] = Float(type | 1)
+        if (c.link.params.params["FENCE_ACTION"]?.value ?? 0) == 0 { out["FENCE_ACTION"] = 1 }
+        return out
+    }
+
+    static func geofenceApply(_ c: Ctx) {
+        guard c.connectAndWaitForVehicle(), c.waitParams() else { return }
+        c.link.params.setMany(fenceWrites(c, alt: 60))
+        c.waitUntil(10) { c.link.params.queuedWrites == 0 && c.link.params.pendingNames.isEmpty }
+        let p = c.link.params.params
+        c.check("D7 FENCE_ALT_MAX = 60", p["FENCE_ALT_MAX"]?.value == 60, "\(String(describing: p["FENCE_ALT_MAX"]?.value))")
+        c.check("D7 FENCE_ENABLE = 1", p["FENCE_ENABLE"]?.value == 1)
+        c.check("D7 FENCE_TYPE has bit 0", (Int(p["FENCE_TYPE"]?.value ?? 0) & 1) == 1, "\(String(describing: p["FENCE_TYPE"]?.value))")
+        c.check("D7 no failed writes", c.link.params.failedWrites.isEmpty, "\(c.link.params.failedWrites)")
+    }
+
+    static func fenceBreach(_ c: Ctx) {
+        guard c.connectAndWaitForVehicle(), c.waitParams() else { return }
+        c.link.commands.setMode(4, name: "Guided"); c.waitUntil(5) { c.vehicle.customMode == 4 }
+        c.link.commands.arm(true); c.waitUntil(5) { c.vehicle.armed }
+        c.link.commands.command(MissionCmd.takeoff, params: [0, 0, 0, 0, 0, 0, 40], label: "Takeoff to 40 m")
+        c.waitUntil(30) { c.vehicle.relativeAltitude > 25 }
+        // FencePage lets you apply a limit BELOW the current altitude while flying, with no warning:
+        c.note("applying 20 m altitude fence while at \(String(format: "%.1f", c.vehicle.relativeAltitude)) m, armed=\(c.vehicle.armed)")
+        c.link.params.setMany(fenceWrites(c, alt: 20))
+        let rtl = c.waitUntil(10) { c.vehicle.customMode == 6 || c.vehicle.customMode == 9 }
+        c.check("G4 fence action (RTL/Land) shown as mode", rtl != nil, c.vehicle.modeName)
+        c.check("G4 breach message in Messages", c.vehicle.messages.contains { $0.text.contains("Fence") }, c.vehicle.messages.first?.text ?? "none")
+        // FencePage.limitAltitude has no armed/altitude guard (SetupView.swift:590-596); this check documents that.
+        let guarded = false
+        c.check("applying a fence below the current altitude while armed is refused or confirmed", guarded,
+                "FENCE_ALT_MAX=20 written at 26+ m while armed with no prompt -> immediate breach")
+        c.waitUntil(60) { !c.vehicle.armed }
+    }
+
+    static func motorTest(_ c: Ctx) {
+        guard c.connectAndWaitForVehicle() else { return }
+        c.link.calibration.motorTest(motor: 2, throttle: 5, duration: 2)
+        c.waitUntil(5) { c.link.commands.pending.isEmpty }
+        c.check("D6 motor test accepted", c.link.commands.lastResultOK, c.link.commands.lastResult ?? "nil")
+        c.link.calibration.motorTest(motor: 1, throttle: 5, duration: 2, count: 4)
+        c.waitUntil(5) { c.link.commands.pending.isEmpty }
+        c.check("D6 sequence test accepted", c.link.commands.lastResultOK, c.link.commands.lastResult ?? "nil")
     }
 }
