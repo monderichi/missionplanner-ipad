@@ -611,6 +611,9 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
 | Backgrounding, rotation, memory warning | iOS lifecycle | N/T (no Xcode) |
 | Fuzzing (random valid-CRC frames, all 349 ids, NaN/Inf-biased floats, random sysids) | `probe_fuzz_pipeline.sh` (300k frames), `probe_fuzz_pipeline_skip_known.sh` (3 × 300k, skipping ids 76/39) | CRASH on ids 76 (BUG-009) and 39 (BUG-007); no other traps in 900k frames; out-of-range values stored (BUG-003/-004) |
 | Data races (Thread Sanitizer) | 8 network/replay scenarios with `HARNESS_SANITIZE=thread` | FAIL → BUG-032 (4 reports in 2 scenarios) |
+| Memory errors (AddressSanitizer) | `HARNESS_SANITIZE=address`: connect, connect_spam, replay, malformed, lossy_link_corrupt, log_download, fuzz | PASS (no reports) |
+| Mission protocol edge cases | `mission_no_space` (MISSION_ACK NO_SPACE → "No space (too many items)"), `mission_oob` (request beyond count → upload aborted with "Vehicle asked for item 16 of 11") | PASS (aborting is acceptable; the `mission_oob` check expects "accepted" and so reports FAIL by design) |
+| Parameter edge cases | `param_16char` (16-char name, no NUL: decoded and writable), `param_count_change` (inconsistent total → "10 missing. Tap Refresh") | PASS (the FAIL in `param_count_change` comes from the fake's inconsistent count; the app's handling is correct) |
 | Existing tests | `testing/unit/run_unit_tests.sh` | PASS 34/34 |
 
 ---
@@ -650,3 +653,5 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
 - Fuzzing: in-process fuzzer (`testing/harness/Sources/Fuzz.swift`) through the real VehicleModel/stores routing: crashes on
   COMMAND_LONG (BUG-009) and legacy MISSION_ITEM (added to BUG-007); 900k further frames without a trap.
 - Thread Sanitizer build (`HARNESS_SANITIZE=thread`): data races on transport callbacks → BUG-032.
+- Protocol edge cases (NO_SPACE, out-of-range request, 16-char names, changing param_count): app handling correct.
+  AddressSanitizer over 7 scenarios incl. fuzzing: no reports.

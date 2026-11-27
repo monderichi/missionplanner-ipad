@@ -19,7 +19,7 @@ enum Scenarios {
         "compid_switch": compidSwitch, "long_session": longSession, "sitl_smoke": sitlSmoke,
         "link_loss_proxy": linkLossProxy, "sitl_arm": sitlArm, "servo_before_params": servoBeforeParams,
         "esc_telemetry": escTelemetry, "prearm_check": prearmCheck, "accel_cal": accelCal, "compass_cal": compassCal,
-        "geofence_apply": geofenceApply, "fence_breach": fenceBreach, "motor_test": motorTest, "probe:fuzz_pipeline": Fuzz.run,
+        "geofence_apply": geofenceApply, "fence_breach": fenceBreach, "motor_test": motorTest, "mission_edge": missionEdge, "param_edge": paramEdge, "probe:fuzz_pipeline": Fuzz.run,
     ].merging(Probes.all, uniquingKeysWith: { a, _ in a })
 
     // MARK: B. connection
@@ -787,5 +787,30 @@ enum Scenarios {
         c.link.calibration.motorTest(motor: 1, throttle: 5, duration: 2, count: 4)
         c.waitUntil(5) { c.link.commands.pending.isEmpty }
         c.check("D6 sequence test accepted", c.link.commands.lastResultOK, c.link.commands.lastResult ?? "nil")
+    }
+
+    static func missionEdge(_ c: Ctx) {
+        guard c.connectAndWaitForVehicle() else { return }
+        c.link.mission.setItems(.mission, sampleMission(c, n: 8))
+        c.link.mission.write(.mission)
+        let done = c.waitUntil(20) { c.link.mission.busy == nil }
+        c.check("upload finishes (no hang)", done != nil, "busy=\(String(describing: c.link.mission.busy))")
+        let b = c.link.mission.banner ?? "nil"
+        c.note("banner: \(b)")
+        let expect = c.args.extra["expect"] ?? "accepted"
+        c.check("banner reports '\(expect)'", b.lowercased().contains(expect), b)
+    }
+
+    static func paramEdge(_ c: Ctx) {
+        guard c.connectAndWaitForVehicle() else { return }
+        c.waitParams(timeout: 40)
+        let n = c.link.params.params.count
+        c.note("count=\(n) state=\(c.link.params.downloadState) banner=\(c.link.params.banner ?? "nil")")
+        if let name = c.args.extra["name"] {
+            c.check("16-char name decoded", c.link.params.params[name]?.value == 42, "\(String(describing: c.link.params.params[name]))")
+            c.link.params.set(name, 43)
+            c.waitUntil(6) { c.link.params.pendingNames.isEmpty }
+            c.check("16-char name writable", c.link.params.params[name]?.value == 43, c.link.params.banner ?? "nil")
+        }
     }
 }

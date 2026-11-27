@@ -11,7 +11,7 @@ Faults (--fault NAME[,NAME...] at start, or at runtime: echo "fault NAME on|off"
   reject_arm reject_mode no_ack slow_ack silent hb_only malformed dup reorder disconnect_on_arm
   disconnect_on_takeoff reboot_on_arm second_vehicle other_gcs compid_switch accelcal_nan accelcal_neg
   statustext_flood param_nan fltmode_ch0 mode_change_mid_mission v1_only high_rate wrong_sysid_ack
-  ack_wrong_command accelcal_fail magcal_fail no_esc
+  ack_wrong_command accelcal_fail magcal_fail no_esc mission_no_space mission_oob param_16char param_count_change
 
 Control port commands (UDP text, default 127.0.0.1:17001): "fault NAME on|off", "silent N" (go silent N s),
 "reboot", "status" (prints state to stdout), "quit".
@@ -92,6 +92,8 @@ class Drone:
         if a.params:
             while len(self.params) < a.params:
                 self.params[f"BULK_{len(self.params):05d}"] = 1.0
+        if "param_16char" in self.faults:
+            self.params["ABCDEFGHIJKLMNOP"] = 42.0  # exactly 16 chars: no NUL terminator on the wire
         self.param_names = sorted(self.params)
         self.armed = False
         self.mode = 0
@@ -414,8 +416,11 @@ class Drone:
             v = float("nan")
         if "fltmode_ch0" in self.faults and name == "FLTMODE_CH":
             v = 0.0
-        self.send("PARAM_VALUE", param_id=name, param_value=v, param_type=9, param_count=len(self.param_names),
-                  param_index=idx)
+        count = len(self.param_names)
+        if "param_count_change" in self.faults and self.stats.get("pv_sent", 0) > 50:
+            count += 10  # vehicle reports a different total mid-download (e.g. a script added params)
+        self.stats["pv_sent"] = self.stats.get("pv_sent", 0) + 1
+        self.send("PARAM_VALUE", param_id=name, param_value=v, param_type=9, param_count=count, param_index=idx)
 
     def handle(self, pkt):
         self.stats["rx"] += 1
@@ -473,7 +478,15 @@ class Drone:
                     self.send("MISSION_ITEM_INT", **it)
         elif name == "MISSION_COUNT":
             log(f"MISSION_COUNT {m['count']} type {m['mission_type']}")
+            if "mission_no_space" in self.faults and m["count"] > 5:
+                self.send("MISSION_ACK", target_system=255, target_component=190, type=4, mission_type=m["mission_type"])
+                log("MISSION_ACK NO_SPACE")
+                return
             self.upload = (m["mission_type"], m["count"], [None] * m["count"])
+            if "mission_oob" in self.faults:
+                self.send("MISSION_REQUEST_INT", seq=m["count"] + 5, target_system=255, target_component=190,
+                          mission_type=m["mission_type"])
+                log("requested out-of-range seq")
             if m["count"] == 0:
                 self.set_items(m["mission_type"], [])
                 self.upload = None
