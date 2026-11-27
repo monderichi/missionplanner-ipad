@@ -169,6 +169,21 @@ tried on the iPad: the map editing, calibrations, motor test and replay need a r
   updatedAt}. Read them with ArtifactData `list` collection `feedback` (owner/editors read all, testers only their own).
 - Next: collect results; analyse any shared iPad .tlog (B2 = the HUD over ELRS) and fix failures.
 
+## Batch 2 + simulator CI (2026-11-27)
+
+- Workflow: Opus plans/reviews, Sonnet sub-agents implement (user preference). Four parallel agents with
+  disjoint file ownership worked well; Opus fixed compile risks (`for (k, var v)` patterns, Slider trailing
+  closures, typed tuple closures) and wired cross-file glue.
+- CI simulator job (`[sim]` in the commit message or a manual run): `scripts/sim_screenshots.sh` + `tools/fake_vehicle.py`
+  publish screenshots, the fake vehicle log and the app's own .tlogs to the `ci-screenshots` branch
+  (`git fetch origin ci-screenshots; git archive --format=zip ...`).
+- Green: `903bf32` (CI run 46063788920, 2.23 MB IPA). Batch 2 = graph tab, MAVLink inspector, custom Quick
+  tiles, setup pages (servo out, optional hardware, gyro/baro/airspeed cal, fixed-yaw compass cal, planner
+  settings), ADS-B on the map, gimbal/camera, long-press menu (fly/ROI/measure), circle/orbit, DataFlash
+  review (`DataFlash.swift` + tests).
+- TODO: simulator screenshots of the new screens (add shots for -MPTab graph and the new setup pages), ADS-B in
+  fake_vehicle.py, use PlannerSettings units in the screens, and real-iPad testing (tester page has 0 results).
+
 ## Backlog after the ELRS link works
 
 Phases 4–7 from `CLAUDE_PROMPTS.md`: map upgrades (trail, offline tiles), the mission editor
