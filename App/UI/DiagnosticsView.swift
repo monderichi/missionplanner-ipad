@@ -47,6 +47,9 @@ struct DiagnosticsView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section("Tools") {
+                    NavigationLink { InspectorView() } label: { Label("MAVLink Inspector", systemImage: "list.bullet.rectangle") }
+                }
                 Section("Send feedback") {
                     ShareLink(item: report) { Label("Share diagnostics report (text)", systemImage: "doc.text") }
                     if let latest = logs.first {

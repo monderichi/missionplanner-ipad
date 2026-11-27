@@ -19,6 +19,15 @@ enum SetupPage: String, CaseIterable, Identifiable {
     case radio = "Radio calibration"
     case modes = "Flight modes"
     case motors = "Motor test"
+    case servo = "Servo output"
+    case othercal = "Other calibrations"
+    case rangefinder = "Rangefinder"
+    case airspeed = "Airspeed sensor"
+    case flow = "Optical flow"
+    case gps = "GPS"
+    case compasscfg = "Compass config"
+    case serial = "Serial ports"
+    case planner = "Planner settings"
 
     var id: String { rawValue }
 
@@ -45,6 +54,26 @@ enum SetupPage: String, CaseIterable, Identifiable {
         "AIRSPEED_CRUISE", "TRIM_THROTTLE", "TECS_CLMB_MAX", "TECS_SINK_MAX", "NAVL1_PERIOD",
     ]
 
+    /// REA Parity Source: MissionPlanner ConfigRangeFinder.cs / ConfigOpticalFlow.cs / ConfigHWAirspeed.cs / ConfigHWCompass.cs.
+    static let rangefinderParams = [
+        "RNGFND1_TYPE", "RNGFND1_ORIENT", "RNGFND1_MIN_CM", "RNGFND1_MIN", "RNGFND1_MAX_CM", "RNGFND1_MAX",
+        "RNGFND1_GNDCLEAR", "RNGFND1_SCALING", "RNGFND1_OFFSET", "RNGFND1_PIN",
+    ]
+    static let airspeedParams = ["ARSPD_TYPE", "ARSPD_USE", "ARSPD_PIN", "ARSPD_RATIO", "ARSPD_OFFSET", "ARSPD_AUTOCAL", "ARSPD_BUS"]
+    static let flowParams = ["FLOW_TYPE", "FLOW_ORIENT_YAW", "FLOW_FXSCALER", "FLOW_FYSCALER", "FLOW_POS_X", "FLOW_POS_Y", "FLOW_POS_Z"]
+    static let gpsParams = [
+        "GPS_TYPE", "GPS1_TYPE", "GPS_TYPE2", "GPS2_TYPE", "GPS_AUTO_CONFIG", "GPS_GNSS_MODE", "GPS1_GNSS_MODE",
+        "GPS_GNSS_MODE2", "GPS2_GNSS_MODE", "GPS_RATE_MS", "GPS_RATE_MS2", "GPS_AUTO_SWITCH", "GPS_PRIMARY",
+    ]
+    static let compassParams = [
+        "COMPASS_ENABLE", "COMPASS_USE", "COMPASS_USE2", "COMPASS_USE3", "COMPASS_ORIENT", "COMPASS_ORIENT2",
+        "COMPASS_EXTERNAL", "COMPASS_AUTODEC", "COMPASS_DEC", "COMPASS_LEARN",
+    ]
+    static let serialParams: [String] = (0...8).flatMap { ["SERIAL\($0)_PROTOCOL", "SERIAL\($0)_BAUD"] }
+
+    /// The Planner settings page is local to this iPad and works without a vehicle.
+    var needsVehicle: Bool { self != .planner }
+
     var icon: String {
         switch self {
         case .prearm: return "checklist"
@@ -59,6 +88,15 @@ enum SetupPage: String, CaseIterable, Identifiable {
         case .radio: return "dot.radiowaves.left.and.right"
         case .modes: return "switch.2"
         case .motors: return "fanblades"
+        case .servo: return "slider.vertical.3"
+        case .othercal: return "scope"
+        case .rangefinder: return "ruler"
+        case .airspeed: return "wind"
+        case .flow: return "camera.metering.center.weighted"
+        case .gps: return "location.fill"
+        case .compasscfg: return "safari"
+        case .serial: return "cable.connector"
+        case .planner: return "gearshape"
         }
     }
 }
@@ -92,7 +130,7 @@ struct SetupView: View {
                         .padding(.horizontal, 12).padding(.vertical, 6)
                         .background(Color.accentColor.opacity(0.10))
                 }
-                if !commands.isAttached {
+                if page.needsVehicle && !commands.isAttached {
                     Text("Connect to a vehicle to use Setup.").foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
@@ -111,6 +149,21 @@ struct SetupView: View {
                     case .radio: RadioPage()
                     case .modes: FlightModesPage()
                     case .motors: MotorTestPage()
+                    case .servo: ServoPage()
+                    case .othercal: OtherCalPage()
+                    case .rangefinder: ParamListPage(title: "Rangefinder", names: SetupPage.rangefinderParams,
+                                                     footer: "Only parameters the firmware has are shown. Reboot after changing the sensor type.")
+                    case .airspeed: ParamListPage(title: "Airspeed", names: SetupPage.airspeedParams,
+                                                  footer: "Airspeed parameters exist only on firmware with an airspeed library (Plane, VTOL, and Copter builds that include it). Reboot after changing the sensor type.")
+                    case .flow: ParamListPage(title: "Optical flow", names: SetupPage.flowParams,
+                                              footer: "Reboot after enabling the sensor. Position offsets are relative to the flight controller, in metres.")
+                    case .gps: ParamListPage(title: "GPS", names: SetupPage.gpsParams,
+                                             footer: "Reboot after changing the GPS type. Newer firmware names these GPS1_TYPE / GPS1_GNSS_MODE; only the ones this vehicle has are shown.")
+                    case .compasscfg: ParamListPage(title: "Compass config", names: SetupPage.compassParams,
+                                                    footer: "Calibrate on the Compass page. Reboot after changing which compasses are used or their orientation.")
+                    case .serial: ParamListPage(title: "Serial ports", names: SetupPage.serialParams,
+                                                footer: "Take care: changing the protocol of the port this link uses (for example SERIAL6 for ExpressLRS) can cut your connection. A reboot is needed.")
+                    case .planner: PlannerSettingsPage()
                     }
                 }
             }
@@ -310,6 +363,7 @@ struct CompassPage: View {
                     }
                 }
             }
+            FixedYawCalSection()
             Section {
                 EmptyView()
             } footer: {
@@ -770,11 +824,13 @@ struct LogsPage: View {
     @EnvironmentObject var logs: LogStore
     @EnvironmentObject var vehicle: VehicleModel
     @State private var confirmErase = false
+    @State private var showReview = false
 
     var body: some View {
         Form {
             Section {
                 HStack {
+                    Button { showReview = true } label: { Label("Review a downloaded log…", systemImage: "chart.xyaxis.line") }
                     Button { logs.refresh() } label: { Label("List logs on the vehicle", systemImage: "arrow.clockwise") }
                         .disabled(logs.listing || logs.downloading != nil)
                     if logs.listing { ProgressView() }
@@ -813,6 +869,7 @@ struct LogsPage: View {
                     .disabled(logs.entries.isEmpty || vehicle.armed)
             }
         }
+        .sheet(isPresented: $showReview) { LogReviewPicker() }
         .alert("Erase all logs?", isPresented: $confirmErase) {
             Button("Erase", role: .destructive) { logs.eraseAll() }
             Button("Cancel", role: .cancel) {}

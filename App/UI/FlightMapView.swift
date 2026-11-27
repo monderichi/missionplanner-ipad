@@ -13,19 +13,50 @@ struct FlightMapView: View {
     @State private var flyTarget: GeoPoint?
     @State private var flyAlt: Double = 20
     @State private var visible: (MKMapRect, Int)?
+    /// Long-press menu target, and the distance tool's two points.
+    @State private var menuPoint: GeoPoint?
+    @State private var measureStart: GeoPoint?
+    @State private var measureEnd: GeoPoint?
 
     private var source: TileSource { TileSource(rawValue: sourceRaw) ?? .appleHybrid }
+
+    private var measureText: String? {
+        guard let a = measureStart, let b = measureEnd else { return nil }
+        let d = Geo.distance(a, b)
+        let ds = d >= 1000 ? String(format: "%.2f km", d / 1000) : String(format: "%.0f m", d)
+        return "\(ds) · bearing \(Int(Geo.bearing(a, b).rounded()))°"
+    }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
             MapCanvas(vehicle: vehicle, mission: mission, tileSource: source, follow: follow,
+                      measureStart: measureStart, measureEnd: measureEnd,
                       onLongPress: { p in
-                          guard mission.isAttached else { return }
-                          flyAlt = max(10, (vehicle.relativeAltitude / 5).rounded() * 5)
-                          flyTarget = p
+                          if measureStart != nil && measureEnd == nil {
+                              measureEnd = p   // second point of the distance tool
+                          } else {
+                              menuPoint = p
+                          }
                       },
                       regionChanged: { rect, zoom in visible = (rect, zoom) })
                 .ignoresSafeArea(edges: .bottom)
+            if measureStart != nil {
+                HStack(spacing: 8) {
+                    Image(systemName: "ruler")
+                    Text(measureText ?? "Long-press the second point")
+                        .font(.callout).monospacedDigit()
+                    Button {
+                        measureStart = nil
+                        measureEnd = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                }
+                .padding(8)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(10)
+            }
             VStack(alignment: .trailing, spacing: 8) {
                 MapToolsMenu(sourceRaw: $sourceRaw, visible: visible)
                 Button {
@@ -55,6 +86,31 @@ struct FlightMapView: View {
                 Text(a).font(.caption2).padding(4).background(.ultraThinMaterial)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             }
+        }
+        .confirmationDialog("Map point", isPresented: Binding(get: { menuPoint != nil }, set: { if !$0 { menuPoint = nil } }),
+                            titleVisibility: .visible) {
+            if let p = menuPoint {
+                Button("Fly here (Guided)…") {
+                    flyAlt = max(10, (vehicle.relativeAltitude / 5).rounded() * 5)
+                    // let the dialog finish dismissing before the altitude alert appears
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { flyTarget = p }
+                }
+                .disabled(!mission.isAttached)
+                Button("Point camera here (ROI)") {
+                    // MAV_CMD_DO_SET_ROI_LOCATION: lat/lon travel as COMMAND_LONG floats, which only keep
+                    // about 1 m of precision; fine for pointing a camera.
+                    commands.command(195, params: [0, 0, 0, 0, Float(p.latitude), Float(p.longitude), 0],
+                                     label: "Point camera at map position")
+                }
+                .disabled(!mission.isAttached)
+                Button("Measure distance from here") {
+                    measureStart = p
+                    measureEnd = nil
+                }
+                Button("Cancel", role: .cancel) {}
+            }
+        } message: {
+            if let p = menuPoint { Text(String(format: "%.6f, %.6f", p.latitude, p.longitude)) }
         }
         .alert("Fly here?", isPresented: Binding(get: { flyTarget != nil }, set: { if !$0 { flyTarget = nil } })) {
             TextField("Altitude (m above home)", value: $flyAlt, format: .number)

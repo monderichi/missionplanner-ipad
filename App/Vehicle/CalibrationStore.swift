@@ -74,6 +74,29 @@ final class CalibrationStore: ObservableObject {
 
     func resetAccel() { accel = .idle }
 
+    // MARK: gyro / baro / airspeed / fixed-yaw compass (REA Parity Source: MissionPlanner ConfigHWCompass2 / ConfigAccelerometerCalibration)
+
+    /// MAV_CMD_PREFLIGHT_CALIBRATION param1 = 1: gyroscope calibration (vehicle must be still).
+    func calibrateGyro() {
+        commands?.sendOnce(AccelCalCmd.preflightCalibration, params: [1, 0, 0, 0, 0, 0, 0], label: "Gyro calibration")
+    }
+
+    /// MAV_CMD_PREFLIGHT_CALIBRATION param3 = 1: ground pressure (barometer) calibration.
+    func calibrateBaro() {
+        commands?.sendOnce(AccelCalCmd.preflightCalibration, params: [0, 0, 1, 0, 0, 0, 0], label: "Barometer calibration")
+    }
+
+    /// Airspeed (re)zero. ArduPilot handles this inside the ground-pressure calibration (param3 = 1).
+    func calibrateAirspeed() {
+        commands?.sendOnce(AccelCalCmd.preflightCalibration, params: [0, 0, 1, 0, 0, 0, 0], label: "Airspeed calibration")
+    }
+
+    /// MAV_CMD_FIXED_MAG_CAL_YAW (42006): param1 = true heading in degrees, param2 = compass mask (0 = all),
+    /// param3/param4 = latitude/longitude (0 = use the vehicle's current position).
+    func calibrateFixedYaw(heading: Float) {
+        commands?.command(42006, params: [heading, 0, 0, 0], label: "Large-vehicle compass calibration")
+    }
+
     /// COMMAND_LONG sent by the vehicle to the GCS.
     func handle(_ cmd: MAV.CommandLong) {
         guard cmd.command == AccelCalCmd.vehiclePos else { return }

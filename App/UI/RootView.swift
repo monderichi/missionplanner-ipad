@@ -14,7 +14,7 @@ struct RootView: View {
     @State private var screen = Screen.data
 
     enum Tab: String, CaseIterable, Identifiable {
-        case quick = "Quick", actions = "Actions", checklist = "Checklist", status = "Status", servo = "Servo", messages = "Messages"
+        case quick = "Quick", actions = "Actions", checklist = "Checklist", status = "Status", servo = "Servo", graph = "Graph", messages = "Messages"
         var id: String { rawValue }
     }
 
@@ -87,6 +87,7 @@ struct RootView: View {
                             case .actions: ScrollView { ActionsView() }
                             case .checklist: ChecklistView()
                             case .servo: ScrollView { ServoView() }
+                            case .graph: GraphView()
                             case .status: StatusListView()
                             case .messages: MessagesView()
                             }

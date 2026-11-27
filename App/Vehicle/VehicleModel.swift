@@ -115,6 +115,18 @@ final class VehicleModel: ObservableObject {
     @Published private(set) var batteryConsumedMah: Int?
     @Published private(set) var cellVoltages: [Double] = []
 
+    // ADSB_VEHICLE (from the FC's ADS-B receiver or any other component), keyed by ICAO address
+    struct Traffic: Equatable {
+        var callsign: String
+        var position: GeoPoint
+        var altitude: Double    // m (ADSB altitude is mm)
+        var heading: Double     // deg
+        var speed: Double       // m/s
+        var lastSeen: Date
+    }
+    @Published private(set) var traffic: [UInt32: Traffic] = [:]
+    static let trafficTimeout: TimeInterval = 60
+
     private var statusChunks: [UInt16: String] = [:]
     static let heartbeatTimeout: TimeInterval = 5
     static let attitudeTimeout: TimeInterval = 3
@@ -172,6 +184,7 @@ final class VehicleModel: ObservableObject {
         lastAttitude = nil
         attitudeStale = false
         heartbeatSources = [:]
+        traffic = [:]
     }
 
     func clearTrail() { trail = [] }
@@ -213,6 +226,10 @@ final class VehicleModel: ObservableObject {
         if alive != heartbeatAlive { heartbeatAlive = alive }
         let stale = alive && (lastAttitude.map { now.timeIntervalSince($0) > Self.attitudeTimeout } ?? true)
         if stale != attitudeStale { attitudeStale = stale }
+        if !traffic.isEmpty {
+            let fresh = traffic.filter { now.timeIntervalSince($0.value.lastSeen) < Self.trafficTimeout }
+            if fresh.count != traffic.count { traffic = fresh }
+        }
     }
 
     /// Heartbeat from a flight controller (not a GCS, gimbal, camera, OSD, radio...).
@@ -253,6 +270,21 @@ final class VehicleModel: ObservableObject {
             lastHeartbeat = Date()
             if !heartbeatAlive { heartbeatAlive = true }
             return newVehicle
+        }
+
+        // ADS-B traffic comes from any component (FC or an external receiver): before the sysid guard.
+        if packet.messageID == MAV.AdsbVehicle.mavInfo.id {
+            if let m = packet.decode(MAV.AdsbVehicle.self), m.lat != 0 || m.lon != 0 {
+                let name = MAVString.decode(m.callsign).trimmingCharacters(in: .whitespaces)
+                traffic[m.ICAOAddress] = Traffic(
+                    callsign: name.isEmpty ? String(format: "%06X", m.ICAOAddress) : name,
+                    position: GeoPoint(latitude: Double(m.lat) / 1e7, longitude: Double(m.lon) / 1e7),
+                    altitude: Double(m.altitude) / 1000,
+                    heading: Double(m.heading) / 100,
+                    speed: Double(m.horVelocity) / 100,
+                    lastSeen: Date())
+            }
+            return false
         }
 
         // STATUSTEXT from any component of our vehicle (or anyone before we lock on).

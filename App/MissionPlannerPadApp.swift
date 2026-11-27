@@ -20,6 +20,8 @@ struct MissionPlannerPadApp: App {
                 .environmentObject(link.replay)
                 .environmentObject(link.speech)
                 .environmentObject(link.logs)
+                .environmentObject(link.history)
+                .environmentObject(link.inspector)
         }
     }
 }

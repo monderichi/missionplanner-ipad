@@ -8,7 +8,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum PlanTarget: String, CaseIterable, Identifiable {
-    case mission = "Mission", fence = "Fence", rally = "Rally", survey = "Survey"
+    case mission = "Mission", fence = "Fence", rally = "Rally", survey = "Survey", circle = "Circle"
     var id: String { rawValue }
 
     var mapTarget: MapEditTarget {
@@ -17,6 +17,7 @@ enum PlanTarget: String, CaseIterable, Identifiable {
         case .fence: return .fence
         case .rally: return .rally
         case .survey: return .survey
+        case .circle: return .circle
         }
     }
 
@@ -25,7 +26,7 @@ enum PlanTarget: String, CaseIterable, Identifiable {
         case .mission: return .mission
         case .fence: return .fence
         case .rally: return .rally
-        case .survey: return nil
+        case .survey, .circle: return nil
         }
     }
 }
@@ -42,6 +43,8 @@ struct PlanView: View {
     @State private var alert: String?
     @State private var confirmClear = false
     @State private var visible: (MKMapRect, Int)?
+    @State private var circleCenter: GeoPoint?
+    @State private var circleRadius = 100.0
 
     struct EditRef: Identifiable {
         let type: MissionType
@@ -66,6 +69,8 @@ struct PlanView: View {
                 ZStack(alignment: .topTrailing) {
                     MapCanvas(vehicle: vehicle, mission: mission, tileSource: source,
                               editTarget: addMode ? target.mapTarget : .none,
+                              previewCenter: target == .circle ? circleCenter : nil,
+                              previewRadius: target == .circle ? circleRadius : 0,
                               onTap: { p in tap(p) },
                               onMove: { t, i, p in move(t, i, p) },
                               onSelect: { t, i in select(t, i) },
@@ -82,6 +87,8 @@ struct PlanView: View {
                 Group {
                     if target == .survey {
                         SurveyPanel()
+                    } else if target == .circle {
+                        CirclePanel(center: $circleCenter, radius: $circleRadius)
                     } else if let type = target.missionType {
                         PlanItemList(type: type, onEdit: { i in editing = EditRef(type: type, index: i) })
                     }
@@ -119,7 +126,13 @@ struct PlanView: View {
         }
         .confirmationDialog("Clear \(target.rawValue.lowercased())?", isPresented: $confirmClear, titleVisibility: .visible) {
             Button("Clear", role: .destructive) {
-                if let t = target.missionType { mission.clear(t) } else { mission.surveyPolygon = [] }
+                if let t = target.missionType {
+                    mission.clear(t)
+                } else if target == .circle {
+                    circleCenter = nil
+                } else {
+                    mission.surveyPolygon = []
+                }
             }
         } message: {
             Text("This only clears the plan on the iPad. Tap Write to change the vehicle.")
@@ -132,6 +145,7 @@ struct PlanView: View {
         case .fence: return "Tap to add fence vertices (one inclusion polygon) · drag to move"
         case .rally: return "Tap to add a rally point · drag to move"
         case .survey: return "Tap to outline the survey area · drag corners to adjust · then Generate"
+        case .circle: return "Tap the map to set the circle centre · then set radius and Generate"
         }
     }
 
@@ -141,7 +155,7 @@ struct PlanView: View {
                 ForEach(PlanTarget.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
-            .frame(width: 330)
+            .frame(width: 400)
             Toggle(isOn: $addMode) { Label("Add on tap", systemImage: "hand.tap") }
                 .toggleStyle(.button)
             Spacer()
@@ -183,6 +197,8 @@ struct PlanView: View {
     private func tap(_ p: GeoPoint) {
         if target == .survey {
             mission.surveyPolygon.append(p)
+        } else if target == .circle {
+            circleCenter = p
         } else if let t = target.missionType {
             mission.add(t, at: p)
         }
@@ -195,7 +211,7 @@ struct PlanView: View {
         case .mission: mission.move(.mission, index: i, to: p)
         case .fence: mission.move(.fence, index: i, to: p)
         case .rally: mission.move(.rally, index: i, to: p)
-        case .none: break
+        case .none, .circle: break
         }
     }
 
@@ -482,6 +498,71 @@ struct SurveyPanel: View {
                 if let r = result { Text(r).font(.caption).foregroundColor(.secondary) }
             } footer: {
                 Text("Waypoints are appended after the current mission items. Review them under Mission, then Write.")
+            }
+        }
+    }
+
+    private func row(_ label: String, _ value: Binding<Double>) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            TextField(label, value: value, format: .number)
+                .keyboardType(.decimalPad)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 80)
+        }
+    }
+}
+
+/// Circle / orbit generator panel (Mission Planner Auto WP > Circle).
+struct CirclePanel: View {
+    @EnvironmentObject var mission: MissionStore
+    @Binding var center: GeoPoint?
+    @Binding var radius: Double
+    @AppStorage("circle.points") private var points = 12
+    @AppStorage("circle.alt") private var altitude = 50.0
+    @AppStorage("circle.clockwise") private var clockwise = true
+    @AppStorage("circle.turns") private var turns = 1
+    @AppStorage("circle.loiter") private var asLoiter = false
+    @State private var result: String?
+
+    var body: some View {
+        Form {
+            Section("Centre") {
+                if let c = center {
+                    Text(String(format: "%.6f, %.6f", c.latitude, c.longitude)).font(.callout).monospacedDigit()
+                } else {
+                    Text("Tap the map to place the centre").foregroundColor(.secondary)
+                }
+            }
+            Section("Circle") {
+                row("Radius (m)", $radius)
+                row("Altitude (m)", $altitude)
+                Picker("Direction", selection: $clockwise) {
+                    Text("Clockwise").tag(true)
+                    Text("Counter-clockwise").tag(false)
+                }
+                .pickerStyle(.segmented)
+                Stepper("Turns: \(turns)", value: $turns, in: 1...5)
+                Toggle("Insert as a single LOITER_TURNS item", isOn: $asLoiter)
+                if !asLoiter {
+                    Stepper("Points per turn: \(points)", value: $points, in: 4...36)
+                }
+            }
+            Section {
+                LabeledContent("Items to add", value: asLoiter ? "1" : "\(points * turns)")
+                Button {
+                    guard let c = center else { return }
+                    let n = mission.addCircle(center: c, radius: radius, points: points, altitude: Float(altitude),
+                                              clockwise: clockwise, turns: turns, asLoiterTurns: asLoiter)
+                    result = n > 0 ? "Added \(n) item\(n == 1 ? "" : "s") to the mission" : "Radius must be above 0"
+                } label: {
+                    Label("Generate into mission", systemImage: "circle.dashed")
+                }
+                .disabled(center == nil || radius <= 0)
+                if let r = result { Text(r).font(.caption).foregroundColor(.secondary) }
+            } footer: {
+                Text("A LOITER_TURNS item is how ArduPilot flies a true orbit. Waypoints are appended after the current mission items; review them under Mission, then Write.")
             }
         }
     }

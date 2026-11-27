@@ -22,17 +22,60 @@ struct QuickTile: View {
 
 struct QuickView: View {
     @EnvironmentObject var vehicle: VehicleModel
+    private static let defaultsKey = "quick.tiles"
+    private static let defaultTiles = ["alt", "gs", "wpdist", "climb", "yaw", "batv"]
+    @State private var tiles: [String] = QuickView.loadTiles()
+
+    private static func loadTiles() -> [String] {
+        let saved = UserDefaults.standard.stringArray(forKey: defaultsKey) ?? []
+        if saved.count == 6 && saved.allSatisfy({ TelemetryCatalogue.def($0) != nil }) { return saved }
+        return defaultTiles
+    }
 
     var body: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-            QuickTile(title: "Altitude (m)", value: String(format: "%.1f", vehicle.relativeAltitude))
-            QuickTile(title: "Ground speed (m/s)", value: String(format: "%.1f", vehicle.groundspeed))
-            QuickTile(title: "Dist to WP (m)", value: String(format: "%.0f", vehicle.waypointDistance))
-            QuickTile(title: "Vertical speed (m/s)", value: String(format: "%+.1f", vehicle.climbRate))
-            QuickTile(title: "Yaw (deg)", value: String(format: "%.0f", vehicle.yaw))
-            QuickTile(title: "Battery (V)", value: String(format: "%.2f", vehicle.batteryVoltage),
-                      color: (0..<20).contains(vehicle.batteryRemaining) ? .red : .primary)
+            ForEach(0..<tiles.count, id: \.self) { i in
+                tile(i)
+            }
         }
+    }
+
+    @ViewBuilder
+    private func tile(_ i: Int) -> some View {
+        if let d = TelemetryCatalogue.def(tiles[i]) {
+            QuickTile(title: d.unit.isEmpty ? d.label : "\(d.label) (\(d.unit))",
+                      value: format(d),
+                      color: d.id == "batv" && (0..<20).contains(vehicle.batteryRemaining) ? .red : .primary)
+                .contextMenu {
+                    ForEach(TelemetryCatalogue.quickChoices) { c in
+                        Button(c.label) { setTile(i, c.id) }
+                    }
+                    Button("Reset tiles to default") { resetTiles() }
+                }
+        }
+    }
+
+    private func format(_ d: TelemetrySeriesDef) -> String {
+        let v = d.value(vehicle)
+        switch d.id {
+        case "wpdist", "yaw", "thr", "sats", "rc1", "rc2", "rc3", "rc4", "sv1", "sv2", "sv3", "sv4",
+             "esc1", "esc2", "esc3", "esc4":
+            return String(format: "%.0f", v)
+        case "climb": return String(format: "%+.1f", v)
+        case "batv": return String(format: "%.2f", v)
+        default: return String(format: "%.1f", v)
+        }
+    }
+
+    private func setTile(_ i: Int, _ id: String) {
+        guard i < tiles.count else { return }
+        tiles[i] = id
+        UserDefaults.standard.set(tiles, forKey: QuickView.defaultsKey)
+    }
+
+    private func resetTiles() {
+        tiles = QuickView.defaultTiles
+        UserDefaults.standard.set(tiles, forKey: QuickView.defaultsKey)
     }
 }
 

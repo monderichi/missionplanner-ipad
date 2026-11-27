@@ -142,6 +142,8 @@ struct ActionsView: View {
                     .disabled(!ready || vehicle.armed)
             }
 
+            GimbalView()
+
             if let result = commands.lastResult {
                 Label(result, systemImage: commands.lastResultOK ? "checkmark.circle" : "exclamationmark.triangle")
                     .foregroundColor(commands.lastResultOK ? .primary : .orange)
