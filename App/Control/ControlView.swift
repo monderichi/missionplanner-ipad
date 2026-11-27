@@ -31,7 +31,7 @@ struct ControlView: View {
                 HStack {
                     Text("Gain")
                     Slider(value: $manual.gain, in: 0.1...1.0)
-                    Text(String(format: "%.0f%%", manual.gain * 100)).monospacedDigit().frame(width: 44, alignment: .trailing)
+                    Text(String(format: "%.0f%%", manual.gain * 100)).monospacedDigit().lineLimit(1).fixedSize().frame(minWidth: 52, alignment: .trailing)
                 }
                 axisBars
                 buttonsRow
