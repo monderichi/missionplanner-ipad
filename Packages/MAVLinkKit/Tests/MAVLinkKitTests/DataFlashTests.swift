@@ -45,7 +45,8 @@ final class DataFlashTests: XCTestCase {
         let log = try DataFlashLog.parse(try Self.fixtureData())
         XCTAssertEqual(log.skippedBytes, 10)   // the garbage blob inserted after ATT #49
         // ATT 50...99 are still decoded after the garbage.
-        XCTAssertEqual(log.values(message: "ATT", column: "ErrYaw").v[99], 198)
+        // ErrYaw is format 'C' (uint16 * 0.01): the fixture writes raw 2*i = 198 for record 99.
+        XCTAssertEqual(log.values(message: "ATT", column: "ErrYaw").v[99], 1.98, accuracy: 1e-9)
     }
 
     func testLeadingGarbageAndTruncation() throws {
