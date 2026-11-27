@@ -46,7 +46,7 @@ shot() {
   xcrun simctl launch --terminate-running-process "$UDID" "$BID" "$@" >> "$OUT/notes.txt" 2>&1
   sleep "$wait"
   xcrun simctl io "$UDID" screenshot "$OUT/$name.png" > /dev/null 2>&1
-  if ! xcrun simctl spawn "$UDID" launchctl list 2>/dev/null | grep -q "$BID"; then
+  if ! pgrep -f "MissionPlannerPad.app/MissionPlannerPad" > /dev/null; then
     echo "!! app NOT running after $name (crash?)" | tee -a "$OUT/notes.txt"
   fi
 }
@@ -65,6 +65,12 @@ shot 10-setup-modes 16 "${C[@]}" -MPScreen setup -MPSetupPage modes
 shot 11-setup-battery 16 "${C[@]}" -MPScreen setup -MPSetupPage battery
 shot 12-params 18 "${C[@]}" -MPScreen params
 shot 13-diagnostics 12 "${C[@]}" -MPScreen data -MPShowDiagnostics YES
+shot 14-data-messages 16 "${C[@]}" -MPScreen data -MPTab messages
+
+# telemetry logs from the simulator (proves which MAVLink messages, e.g. STATUSTEXT, reached the app)
+DATA=$(xcrun simctl get_app_container "$UDID" "$BID" data 2>/dev/null || true)
+mkdir -p "$OUT/tlogs"
+if [ -n "$DATA" ]; then cp "$DATA"/Documents/logs/*.tlog "$OUT/tlogs/" 2>/dev/null || true; fi
 
 kill "$FAKE" 2>/dev/null || true
 cp ~/Library/Logs/DiagnosticReports/*MissionPlannerPad* "$OUT/" 2>/dev/null || true

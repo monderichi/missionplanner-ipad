@@ -207,7 +207,7 @@ struct ParamOptionRow: View {
                     ForEach(meta?.values ?? []) { o in Text("\(Int(o.code)): \(o.label)").tag(o.code) }
                     if meta?.label(for: p.value) == nil { Text("\(ParamFile.formatValue(p.value))").tag(Double(p.value)) }
                 }
-                .pickerStyle(.navigationLink)
+                .pickerStyle(.menu)
                 if params.pendingNames.contains(name) { ProgressView() }
             }
         }

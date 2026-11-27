@@ -162,7 +162,7 @@ class Vehicle:
                 self.send(42, seq=2, total=len(self.mission) - 1)
             if n == 30:
                 self.send(253, severity=6, text=list(b"ArduCopter V4.7.3 (fake for CI)".ljust(50, b"\0")))
-            if n == 50:
+            if n % 300 == 20 and not self.armed:  # like ArduPilot: repeat PreArm failures every 30 s while disarmed
                 self.send(253, severity=4, text=list(b"PreArm: RC not calibrated (fake)".ljust(50, b"\0")))
             n += 1
             time.sleep(0.1)

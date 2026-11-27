@@ -91,6 +91,18 @@ struct MapCanvas: UIViewRepresentable {
         private var drawnShowMission: Bool?
         private var centeredOnce = false
 
+        /// Red vehicle arrow, rendered once into a bitmap so no tint can turn it black.
+        static let vehicleImage: UIImage? = {
+            let cfg = UIImage.SymbolConfiguration(pointSize: 30, weight: .bold)
+                .applying(UIImage.SymbolConfiguration(paletteColors: [.systemRed]))
+            guard let sym = UIImage(systemName: "location.north.fill", withConfiguration: cfg) else { return nil }
+            let renderer = UIGraphicsImageRenderer(size: sym.size)
+            let img = renderer.image { _ in
+                sym.withTintColor(.systemRed, renderingMode: .alwaysOriginal).draw(in: CGRect(origin: .zero, size: sym.size))
+            }
+            return img.withRenderingMode(.alwaysOriginal)
+        }()
+
         init(_ parent: MapCanvas) { self.parent = parent }
 
         // MARK: sync
@@ -272,9 +284,7 @@ struct MapCanvas: UIViewRepresentable {
                 let id = "vehicle"
                 let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) ?? MKAnnotationView(annotation: a, reuseIdentifier: id)
                 v.annotation = a
-                let cfg = UIImage.SymbolConfiguration(pointSize: 30, weight: .bold)
-                v.image = UIImage(systemName: "location.north.fill", withConfiguration: cfg)?
-                    .withTintColor(.systemRed, renderingMode: .alwaysOriginal)
+                v.image = Coordinator.vehicleImage
                 v.layer.shadowColor = UIColor.black.cgColor
                 v.layer.shadowOpacity = 0.8
                 v.layer.shadowRadius = 2
