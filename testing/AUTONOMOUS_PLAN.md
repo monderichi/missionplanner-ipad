@@ -92,3 +92,7 @@ The user's original request is kept verbatim at the end; the version below is th
   NEXT: 1) read retest_after_pull.log + long-session CSV; 2) catalyst.sh build, then uitest BreakTestUITests3, BreakTestUITests2
   (ADS-B tests), BreakTestUITests; 3) write TESTING_RESULTS.md section 8 "Re-test after pull" (BUG-038, -039, long session);
   4) commit (step 4), push bug_fixes (step 5); 5) fixes per the design list in testing/FIX_LOG.md (create it).
+- 00:37 Resume check-in: full retest after pull finished: 105 runs, 65 PASS / 24 FAIL / 16 CRASH (testing/logs/retest_after_pull.log):
+  same failures/crashes as before the pull (all reported bugs still present), plus manual_control_rover/sub FAIL = BUG-038 NaN
+  check (expected), sitl_lossy_b FAIL = BUG-033, sitl_lossy and sitl_lossy_c passed this time (BUG-033 is intermittent).
+  Long UI session still running (631 s: 32 % CPU, RSS 367.7 MB, rising). Usage limit hit again; NEXT steps unchanged (see 00:36 entry).
