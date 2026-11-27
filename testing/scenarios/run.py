@@ -6,6 +6,8 @@ app harness against it, saves logs to testing/logs/<scenario>.*.log, prints a on
   python3 testing/scenarios/run.py all          # everything except long/SITL ones
   python3 testing/scenarios/run.py probes       # crash probes only
   python3 testing/scenarios/run.py --list
+  python3 testing/scenarios/run.py -j 4 all      # 4 scenarios at a time (each worker gets its own ports,
+                                                 # SITL instance and Documents folder)
 
 Verdicts: PASS (all checks passed), FAIL (a check failed), CRASH (harness died on a signal = the app
 would crash), ERROR (setup problem). Summary appended to testing/logs/summary.txt.
@@ -16,7 +18,9 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 LOGS = os.path.join(ROOT, "testing", "logs")
@@ -25,6 +29,7 @@ PROXY = [sys.executable, os.path.join(ROOT, "testing", "fake_drone", "fault_prox
 SITL_BIN = os.path.join(ROOT, "testing", ".sitl", "ardupilot", "build", "sitl", "bin", "arducopter")
 TCP = ["--tcp-server", "5799"]
 H_TCP = ["--kind", "tcp", "--port", "5799"]
+H_SITL = ["--kind", "udpListen", "--port", "14550"]
 
 # name: dict(drone=[fake_drone args] | None, harness=[harness args], proxy=[proxy args], hooks=[(t, action)])
 S = {
@@ -98,9 +103,29 @@ S = {
     "param_16char": dict(drone=TCP + ["--fault", "param_16char"], harness=H_TCP + ["--name", "ABCDEFGHIJKLMNOP"], name="param_edge"),
     "param_count_change": dict(drone=TCP + ["--fault", "param_count_change"], name="param_edge"),
     "long_session": dict(drone=TCP, harness=H_TCP + ["--secs", "300"], long=True),
-    "sitl_smoke": dict(sitl=True, harness=["--kind", "tcp", "--port", "5760"], long=True),
-    "sitl_params": dict(sitl=True, harness=["--kind", "tcp", "--port", "5760", "--param-timeout", "90"], name="params", long=True),
-    "sitl_arm": dict(sitl=True, harness=["--kind", "tcp", "--port", "5760"], name="sitl_arm", long=True),
+    "sitl_smoke": dict(sitl=True, harness=H_SITL, long=True),
+    "sitl_params": dict(sitl=True, harness=H_SITL + ["--param-timeout", "90"], name="params", long=True),
+    "sitl_arm": dict(sitl=True, harness=H_SITL, name="sitl_arm", long=True),
+    "sitl_auto": dict(sitl=True, harness=H_SITL, name="sitl_auto", long=True),
+    "sitl_accel_probe": dict(sitl=True, harness=H_SITL, name="sitl_accel_probe", long=True),
+    "sitl_fence": dict(sitl=True, harness=H_SITL, name="sitl_fence", long=True),
+    "sitl_param_set": dict(sitl=True, harness=H_SITL + ["--param", "MAV1_EXTRA1"], name="param_set", long=True),
+    "sitl_param_file_roundtrip": dict(sitl=True, harness=H_SITL, name="param_file_roundtrip", long=True),
+    "sitl_mission_roundtrip": dict(sitl=True, harness=H_SITL, name="mission_roundtrip", long=True),
+    "sitl_fence_rally": dict(sitl=True, harness=H_SITL, name="fence_rally", long=True),
+    "sitl_mode_change": dict(sitl=True, harness=H_SITL, name="mode_change", long=True),
+    "sitl_reboot": dict(sitl=True, harness=H_SITL, name="reboot", long=True),
+    "sitl_prearm_check": dict(sitl=True, harness=H_SITL, name="prearm_check", long=True),
+    "sitl_log_download": dict(sitl=True, harness=H_SITL + ["--expect-logs", "-1", "--dl-timeout", "120"], name="log_download", long=True),
+    "sitl_lossy": dict(sitl=True, harness=["--kind", "udpListen", "--port", "14550", "--param-timeout", "180"],
+                       sitl_port=14560, proxy=["--listen", "14560", "--loss", "30", "--latency", "80", "--jitter", "60"],
+                       name="lossy_link", long=True),
+    "sitl_lossy_b": dict(sitl=True, harness=["--kind", "udpListen", "--port", "14550", "--param-timeout", "180"],
+                         sitl_port=14560, proxy=["--listen", "14560", "--loss", "30", "--latency", "80", "--jitter", "60", "--seed", "7"],
+                         name="lossy_link", long=True),
+    "sitl_lossy_c": dict(sitl=True, harness=["--kind", "udpListen", "--port", "14550", "--param-timeout", "180"],
+                         sitl_port=14560, proxy=["--listen", "14560", "--loss", "15", "--latency", "40", "--jitter", "20", "--seed", "11"],
+                         name="lossy_link", long=True),
 }
 PROBES = ["probe:accelcal_nan", "probe:accelcal_neg", "probe:accelcal_huge", "probe:waypoint_file_nan",
           "probe:waypoint_file_huge_lat", "probe:waypoint_file_unicode", "probe:waypoint_file_huge",
@@ -113,6 +138,21 @@ for p in PROBES:
 # fuzzing (known crash 76 = COMMAND_LONG/ACCELCAL skipped in the second run so other crashes can surface)
 S["probe:fuzz_pipeline"] = dict(drone=None, harness=["--iterations", "300000"])
 S["probe:fuzz_pipeline_skip_known"] = dict(drone=None, harness=["--iterations", "300000", "--skip", "76,39"], name="probe:fuzz_pipeline")
+
+
+PORTS = (5799, 14550, 14555, 14560, 14571, 14572, 14590, 17001)  # every fixed port the scenarios use
+
+
+def remap(args, slot):
+    """Shift every known port in an argument list by 100 * slot so parallel workers don't collide."""
+    if not slot:
+        return list(args)
+    out = []
+    for a in args:
+        for p in PORTS:
+            a = re.sub(rf"(?<!\d){p}(?!\d)", str(p + 100 * slot), a)
+        out.append(a)
+    return out
 
 
 def harness_bin():
@@ -138,39 +178,48 @@ def stop(p):
             os.killpg(p.pid, signal.SIGKILL)
 
 
-def start_sitl(name):
+def start_sitl(name, port=14550, slot=0):
     if not os.path.exists(SITL_BIN):
         return None, "SITL not built (testing/sitl/build_sitl.sh)"
-    wd = os.path.join(ROOT, "testing", ".build", "sitl_run")
+    wd = os.path.join(ROOT, "testing", ".build", f"sitl_run{slot}")
     os.makedirs(wd, exist_ok=True)
     defaults = os.path.join(ROOT, "testing", ".sitl", "ardupilot", "Tools", "autotest", "default_params", "copter.parm")
+    # MAVLink goes out as UDP to the app's "UDP listen" port; serial1/2 point at unused localhost ports so SITL opens
+    # no TCP listeners (its default tcp:5760/5762/5763 would listen on all interfaces).
     cmd = [SITL_BIN, "--model", "quad", "--speedup", "1", "--home", "-35.363262,149.165237,584,353",
-           "--defaults", defaults, "--wipe", "--sim-address", "127.0.0.1"]
+           "--defaults", defaults, "--wipe", "--sim-address", "127.0.0.1",
+           "--serial0", f"udpclient:127.0.0.1:{port}", "--serial1", "udpclient:127.0.0.1:14571",
+           "--serial2", "udpclient:127.0.0.1:14572", "-I", str(slot)]
+    cmd = remap(cmd[:-12], 0) + remap(cmd[-12:], slot)  # ports + instance per worker
     f = open(os.path.join(LOGS, f"{name}.sitl.log"), "w")
     p = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, cwd=wd, start_new_session=True)
     time.sleep(3)
     return p, None
 
 
-def run(key, hb):
+def run(key, hb, slot=0):
     spec = S[key]
     os.makedirs(LOGS, exist_ok=True)
-    home = os.path.join(ROOT, "testing", ".build", "home")
+    home = os.path.join(ROOT, "testing", ".build", "home" if slot == 0 else f"home{slot}")
     os.makedirs(os.path.join(home, "Documents"), exist_ok=True)
     env = dict(os.environ, CFFIXED_USER_HOME=home)
     drone = proxy = sitl = None
     try:
         if spec.get("sitl"):
-            sitl, err = start_sitl(key)
+            sitl, err = start_sitl(key, spec.get("sitl_port", 14550) + 100 * slot, slot)
             if err:
                 return "SKIP", err
         if spec.get("proxy"):
-            proxy = start(PROXY + spec["proxy"], f"{key}.proxy.log")
+            proxy = start(PROXY + remap(spec["proxy"] + ["--app", "127.0.0.1:14550"], slot), f"{key}.proxy.log")
         dargs = spec.get("drone")
+        if dargs is not None:
+            dargs = remap(dargs + ["--control-port", "17001", "--udp-src-port", "14590"], slot)
         if dargs is not None:
             drone = start(DRONE + dargs, f"{key}.drone.log")
             time.sleep(0.6)
-        hargs = spec.get("harness", H_TCP if dargs is not None else [])
+        hargs = remap(spec.get("harness", H_TCP if dargs is not None else []) + ["--ctrl", "17001", "--local-port", "14550"], slot)
+        if spec.get("name") == "connect" and key == "connect_udp_connect":
+            hargs = remap(spec["harness"] + ["--ctrl", "17001"], slot)
         cmd = [hb, spec.get("name", key)] + hargs + ["-speech.enabled", "<false/>"]
         hlog = open(os.path.join(LOGS, f"{key}.harness.log"), "w")
         h = subprocess.Popen(cmd, stdout=hlog, stderr=subprocess.STDOUT, cwd=ROOT, env=env)
@@ -205,6 +254,9 @@ def run(key, hb):
 
 def main():
     args = sys.argv[1:]
+    jobs = 1
+    if len(args) >= 2 and args[0] == "-j":
+        jobs, args = max(1, int(args[1])), args[2:]
     if not args or args == ["--list"]:
         print("\n".join(sorted(S)))
         return
@@ -214,20 +266,37 @@ def main():
         args = PROBES
     elif args == ["sitl"]:
         args = [k for k in S if S[k].get("sitl")]
+    elif args == ["everything"]:
+        args = [k for k in S if k not in ("long_session",)]
     hb = harness_bin()
     results = []
-    with open(os.path.join(LOGS, "summary.txt"), "a") as summary:
-        summary.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} {' '.join(args)}\n")
-        for k in args:
-            if k not in S:
-                print(f"unknown scenario {k}")
-                continue
+    lock = threading.Lock()
+    slots = list(range(jobs))
+    unknown = [k for k in args if k not in S]
+    for k in unknown:
+        print(f"unknown scenario {k}")
+    args = [k for k in args if k in S]
+
+    def one(k):
+        with lock:
+            slot = slots.pop(0)
+        try:
             t0 = time.time()
-            verdict, detail = run(k, hb)
-            line = f"{verdict:5} {k:28} {time.time() - t0:5.1f}s {detail}"
+            verdict, detail = run(k, hb, slot)
+        finally:
+            with lock:
+                slots.append(slot)
+        line = f"{verdict:5} {k:28} {time.time() - t0:5.1f}s {detail}"
+        with lock:
             print(line, flush=True)
             summary.write(line + "\n")
+            summary.flush()
             results.append(verdict)
+
+    with open(os.path.join(LOGS, "summary.txt"), "a") as summary:
+        summary.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} -j {jobs} {' '.join(args)}\n")
+        with ThreadPoolExecutor(max_workers=jobs) as ex:
+            list(ex.map(one, args))
     print(f"TOTAL {len(results)}: " + ", ".join(f"{v}={results.count(v)}" for v in ("PASS", "FAIL", "CRASH", "ERROR", "SKIP")))
     sys.exit(0 if all(r in ("PASS", "SKIP") for r in results) else 1)
 

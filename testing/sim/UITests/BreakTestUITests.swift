@@ -26,7 +26,10 @@ final class BreakTestUITests: XCTestCase {
     private func launch(_ extra: [String] = []) -> XCUIApplication {
         let a = XCUIApplication()
         a.launchArguments = ["-link.kind", "TCP", "-link.host", "127.0.0.1", "-link.port", "5799",
-                             "-speech.enabled", "<false/>"] + extra
+                             "-speech.enabled", "<false/>"]
+            + (extra.contains("-actions.takeoffAlt") ? [] : ["-actions.takeoffAlt", "10"]) + extra
+        // catalyst.sh passes TEST_RUNNER_BREAKTEST_HOME: keep the app's Documents out of the real ~/Documents
+        if let home = ProcessInfo.processInfo.environment["BREAKTEST_HOME"] { a.launchEnvironment["CFFIXED_USER_HOME"] = home }
         a.launch()
         app = a
         return a
@@ -49,7 +52,9 @@ final class BreakTestUITests: XCTestCase {
     }
 
     private func shot(_ name: String) {
-        let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        // app window only (on a Mac, XCUIScreen.main would capture the user's whole desktop)
+        guard let app, app.state == .runningForeground else { return }
+        let a = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
         a.name = name
         a.lifetime = .keepAlways
         add(a)
@@ -71,6 +76,22 @@ final class BreakTestUITests: XCTestCase {
     }
 
     private func tapScreen(_ title: String) { app.segmentedControls.buttons[title].tap() }
+
+    /// SwiftUI .alert is an Alert on iPad but a sheet on Mac Catalyst: find the dialog's button wherever it is.
+    private func dialogButton(_ title: String) -> XCUIElement {
+        for q in [app.alerts, app.sheets, app.dialogs] where q.buttons[title].exists { return q.buttons[title] }
+        let all = app.buttons.matching(identifier: title)
+        return all.count > 1 ? all.element(boundBy: all.count - 1) : all.firstMatch
+    }
+
+    private func dialogShown(timeout: TimeInterval) -> Bool {
+        let end = Date().addingTimeInterval(timeout)
+        repeat {
+            if app.alerts.count + app.sheets.count + app.dialogs.count > 0 { return true }
+            usleep(200_000)
+        } while Date() < end
+        return false
+    }
 
     // MARK: TESTING.md A/B
 
@@ -102,7 +123,7 @@ final class BreakTestUITests: XCTestCase {
         XCTAssertTrue(waitForText("ArduCopter", timeout: 5), "BUG-001: no automatic TCP reconnect")
     }
 
-    func test_BUG003_nanAttitudeDoesNotCrash() {
+    func test_Z1_BUG003_nanAttitudeDoesNotCrash() {
         drone("fault nan_attitude on")
         launch(); connect()
         sleep(4)
@@ -110,7 +131,7 @@ final class BreakTestUITests: XCTestCase {
         shot("BUG003-nan-attitude")
     }
 
-    func test_BUG004_badLatLonDoesNotCrash() {
+    func test_Z2_BUG004_badLatLonDoesNotCrash() {
         drone("fault bad_latlon on")
         launch(); connect()
         sleep(4)
@@ -118,7 +139,7 @@ final class BreakTestUITests: XCTestCase {
         shot("BUG004-bad-latlon")
     }
 
-    func test_BUG005_flightModesWithChannelDisabled() {
+    func test_Z3_BUG005_flightModesWithChannelDisabled() {
         drone("fault fltmode_ch0 on")
         launch(); connect()
         sleep(5) // parameters
@@ -129,7 +150,7 @@ final class BreakTestUITests: XCTestCase {
         shot("BUG005-flight-modes")
     }
 
-    func test_BUG006_persistedHugeTakeoffAltitude() {
+    func test_Z4_BUG006_persistedHugeTakeoffAltitude() {
         launch(["-actions.takeoffAlt", "1e20"]); connect()
         app.buttons["Actions"].firstMatch.tap()
         sleep(2)
@@ -142,22 +163,28 @@ final class BreakTestUITests: XCTestCase {
         drone("fault battery_critical on")
         sleep(4)
         shot("BUG008-critical-battery-expect-banner")
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] 'battery'")).count > 1,
-                      "BUG-008: no battery warning element besides the top-bar item")
+        // a fixed app exposes the warning banner to accessibility (the HUD Canvas text is invisible to XCUITest)
+        let warning = app.descendants(matching: .any).containing(NSPredicate(
+            format: "label CONTAINS[c] 'battery' AND (label CONTAINS[c] 'low' OR label CONTAINS[c] 'critical' OR label CONTAINS[c] 'failsafe')"))
+        XCTAssertTrue(warning.firstMatch.exists, "BUG-008: no low/critical battery warning shown")
     }
 
     func test_BUG013_disconnectWhileArmedAsksFirst() {
         launch(); connect()
         app.buttons["Actions"].firstMatch.tap()
         app.buttons["Arm"].firstMatch.tap()
-        app.alerts.buttons["Arm"].tap()
+        sleep(1)
+        dialogButton("Arm").tap()
         XCTAssertTrue(waitForText("ARMED", timeout: 5))
         app.buttons["Link"].firstMatch.tap()
-        app.collectionViews.buttons["Disconnect"].tap()
-        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 2), "BUG-013: no confirmation while armed")
+        app.buttons["Disconnect"].firstMatch.tap()
+        sleep(2)
+        XCTAssertFalse(waitForText("Disconnected", timeout: 1),
+                       "BUG-013: Disconnect while ARMED went through without a confirmation")
         shot("BUG013-disconnect-armed")
     }
 
+    #if !targetEnvironment(macCatalyst)
     func test_lifecycle_backgroundForegroundKeepsLink() {
         launch(); connect()
         XCUIDevice.shared.press(.home)
@@ -176,4 +203,5 @@ final class BreakTestUITests: XCTestCase {
             assertStillRunning("rotation \(o.rawValue)")
         }
     }
+    #endif
 }

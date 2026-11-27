@@ -1,0 +1,20 @@
+EXC_BREAKPOINT SIGTRAP
+    MissionPlannerPad.debug.dylib: HUDView.body.getter  (HUDView.swift:142)
+    MissionPlannerPad.debug.dylib: protocol witness for View.body.getter in conformance HUDView  (/<compiler-generated>:None)
+    CoreFoundation: __CFRUNLOOP_IS_CALLING_OUT_TO_AN_OBSERVER_CALLBACK_FUNCTION__
+    MissionPlannerPad.debug.dylib: static MissionPlannerPadApp.$main()  (/<compiler-generated>:None)
+EXC_CRASH SIGABRT
+    CoreFoundation: __exceptionPreprocess
+    CoreFoundation: _CFBundleGetValueForInfoKey
+    MapKit: -[MKMapView setCenterCoordinate:animated:]
+    MissionPlannerPad.debug.dylib: MapCanvas.Coordinator.syncVehicle(_:)  (MapCanvas.swift:139)
+EXC_BREAKPOINT SIGTRAP
+    MissionPlannerPad.debug.dylib: closure #1 in closure #1 in FlightModesPage.body.getter  (SetupView.swift:438)
+    MissionPlannerPad.debug.dylib: closure #1 in Section<>.init(content:)  (/<compiler-generated>:None)
+    MissionPlannerPad.debug.dylib: Section.init(content:header:footer:)  (/<compiler-generated>:None)
+    MissionPlannerPad.debug.dylib: Section<>.init(content:)  (/<compiler-generated>:None)
+EXC_BREAKPOINT SIGTRAP
+    MissionPlannerPad.debug.dylib: ActionsView.body.getter  (ActionsView.swift:169)
+    MissionPlannerPad.debug.dylib: protocol witness for View.body.getter in conformance ActionsView  (/<compiler-generated>:None)
+    CoreFoundation: __CFMachPortPerform
+    MissionPlannerPad.debug.dylib: static MissionPlannerPadApp.$main()  (/<compiler-generated>:None)

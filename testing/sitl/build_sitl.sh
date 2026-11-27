@@ -14,6 +14,12 @@ if [[ ! -d "$SITL/ardupilot" ]]; then
       https://github.com/ArduPilot/ardupilot.git "$SITL/ardupilot"
 fi
 cd "$SITL/ardupilot"
+# macOS ld (Xcode 15+/CLT) rejects the unaligned pointers in the PACKED AP_FWVersion struct
+# ("ld: pointer not aligned in AP_FWVersion::fwver"). Packing only matters for firmware images, so drop it for SITL.
+if [[ "$(uname)" == "Darwin" ]] && grep -q "^class PACKED AP_FWVersion" libraries/AP_Common/AP_FWVersion.h; then
+  sed -i '' 's/^class PACKED AP_FWVersion/class AP_FWVersion/' libraries/AP_Common/AP_FWVersion.h
+  echo "patched AP_FWVersion (macOS linker)"
+fi
 PATH="$VENV/bin:$PATH" ./waf configure --board sitl
 PATH="$VENV/bin:$PATH" ./waf copter
 ls -la build/sitl/bin/arducopter

@@ -41,36 +41,44 @@ install, the Files app, speech output, real sensor calibration, real flight.
 
 ## 1. Summary
 
-**Environment.** macOS 26.7.3 (Apple silicon), Command Line Tools with Swift 6.4, **no Xcode → no iPad Simulator**
-(model: none). Python 3.9.6 (stdlib only). Vehicles: scripted fake ArduCopter (all runs) + fault proxy; ArduCopter 4.7.3
-SITL scripted but **not run** (see section 6: the source download had not finished when the session ended).
+**Environment.** macOS 26.7.3 (Apple silicon), Command Line Tools with Swift 6.4, later Xcode 27.2. **No iPad Simulator**
+(model: none): Xcode arrived late in the session without an iOS simulator runtime, and that ~8 GB download was declined.
+Instead the **real, unmodified app UI ran natively on the Mac as a Mac Catalyst build** (`testing/sim/catalyst.sh`) and was
+driven by XCUITest against the fake drone. iPad layout, touch, rotation and backgrounding are therefore not covered. Python 3.9.6 (stdlib only). Vehicles: scripted fake ArduCopter + fault proxy, and **ArduCopter 4.7.3 SITL**
+(tag Copter-4.7.3, d9c5097c, the user's firmware; native macOS build, quad model, CMAC home) for 17 runs.
 
-**What was tested.** 84 scenario/probe runs (+ 8 re-runs under Thread Sanitizer) through the real app link/vehicle/store code, plus the unit suite.
+**What was tested.** 101 scenario/probe runs in the final parallel run (84 fake drone + 17 SITL; plus the 5-minute session run separately; + 8 re-runs under Thread Sanitizer, 7 under AddressSanitizer) through the real app link/vehicle/store code, plus the unit suite.
 
 | Suite | Result |
 |---|---|
 | Existing MAVLinkKit unit tests (34) | **34 pass, 0 fail** |
 | New unit tests (`testing/unit/extra`, 8) | 4 coverage tests pass; 4 regression tests **fail as intended** (BUG-002, -007, -020) |
-| Scenarios + probes (84) | **46 PASS, 20 FAIL, 18 CRASH** (a crash = the app process would die) |
+| Scenarios + probes, final run `-j 4 everything` (101) | **61 PASS, 24 FAIL, 16 CRASH** (a crash = the app process would die) |
+| UI tests on Mac Catalyst (9) | **2 PASS, 7 FAIL**: 4 real app crashes (BUG-003, -004, -005, -006), plus BUG-001, -008, -013 |
 
 Full verdict list: `testing/logs/summary.txt` after a run; the table in section 5 maps every TESTING.md item.
 
 **What works well:** connecting over TCP / UDP listen / UDP connect; heartbeat lock (ignores other GCS and a second
 vehicle); parameter download (400 and 1500 params; 400 params at 30 % loss + 80±60 ms jitter in 9.5 s); write with
 confirm; `.param` round trip; arm/disarm/refusals; modes; guided takeoff/land; mission/fence/rally round trip; AUTO mission
-to RTL and auto-disarm; reboot with parameter re-download; link-loss detection (~5 s) and recovery; parser resync under
+to RTL and auto-disarm (also on real ArduCopter SITL, which also refuses an in-flight disarm and motor-output
+DO_SET_SERVO, with the reason shown); reboot with parameter re-download; 1370-parameter download from SITL in < 1 s
+(20 s at 30 % loss); 3 MB DataFlash download from SITL at ~100 kB/s; link-loss detection (~5 s) and recovery; parser resync under
 noise/bad CRC/truncated/oversized frames; 50 Hz × 8 message streams at ~7 % CPU with flat memory; a 5-minute session grows only 0.5 MB; 700-item missions;
 DataFlash list/download; tlog replay including garbage/empty files; rapid connect/disconnect.
 
-**Top 5 risks**
+**Top risks**
 1. **BUG-001**: when the transport fails (TCP reset/close) the red NO HEARTBEAT banner is *hidden*, the frozen HUD looks
    live, and TCP never reconnects.
 2. **BUG-002**: a command can be "confirmed" by the ACK of an earlier command with the same id (Disarm by the Arm ACK,
    RTL by the Loiter ACK) and is then never retried.
 3. **BUG-003/-004/-009**: single telemetry packets crash the GCS (NaN/Inf/huge ATTITUDE in the HUD, out-of-range position
-   in the map, malformed ACCELCAL COMMAND_LONG). A crash in flight leaves the pilot without a GCS.
+   in the map, malformed ACCELCAL COMMAND_LONG); the HUD and map crashes were reproduced in the real app UI. A crash in flight
+   leaves the pilot without a GCS.
 4. **BUG-008**: low battery and failsafes have no visual warning; without speech the pilot gets no alert at all.
-5. **BUG-005/-006/-007/-010**: configuration and user input crash the app (FLTMODE_CH = 0, a long takeoff-altitude entry
+5. **BUG-033**: on a lossy link (15–30 %), every mission upload to **real ArduPilot 4.7.3** failed or was misreported
+   (INVALID_SEQUENCE treated as fatal; a lost final ACK reported as failure). This is the user's main ExpressLRS use case.
+6. **BUG-005/-006/-007/-010**: configuration and user input crash the app (FLTMODE_CH = 0, a long takeoff-altitude entry
    that persists and crash-loops the Actions tab, latitude typo, corrupt or huge `.waypoints`, big survey).
 
 ---
@@ -84,10 +92,13 @@ testing/unit/run_unit_tests.sh                 # MAVLinkKit suite + testing/unit
 testing/harness/build_harness.sh               # builds the headless app (prints the binary path)
 python3 testing/scenarios/run.py --list        # all scenario names
 python3 testing/scenarios/run.py all           # everything except long/SITL runs (~10 min)
+python3 testing/scenarios/run.py -j 4 everything   # all incl. SITL, 4 at a time (per-worker ports/SITL instance)
 python3 testing/scenarios/run.py probes        # crash probes only (~10 s)
 testing/scenarios/tcp_drop.sh                  # one scenario (one wrapper per scenario)
 python3 testing/scenarios/run.py long_session  # 5 min memory run
-testing/sitl/build_sitl.sh && python3 testing/scenarios/run.py sitl   # real ArduCopter 4.7.3 SITL (~1.5 GB)
+testing/sitl/build_sitl.sh && python3 testing/scenarios/run.py sitl   # real ArduCopter 4.7.3 SITL (~1.5 GB; patches a
+                                                                      # macOS linker issue in AP_FWVersion.h)
+python3 testing/tools/tlog_trace.py <file.tlog> --grep MISSION            # message trace of a recorded run
 ```
 
 Verdicts: PASS / FAIL (a check failed; reason printed) / CRASH (harness died on a signal; the Swift "Fatal error" line is
@@ -111,8 +122,14 @@ testing/sim/sim.sh boot "iPad Pro 13-inch (M4)"
 testing/sim/sim.sh run
 testing/sim/sim.sh shot <name>
 testing/sim/sim.sh stop
+testing/sim/catalyst.sh build              # app as a Mac Catalyst app (needs Xcode + xcodegen, no iOS runtime)
+testing/sim/catalyst.sh uitest             # 9 UI tests vs a self-restarting fake drone; screenshots -> testing/artifacts/catalyst/
 testing/sim/sim.sh uitest            # XCUITest repros (testing/sim/UITests) with a self-restarting fake drone
 ```
+
+SITL runs with `--serial0 udpclient:127.0.0.1:14550` (the app's UDP listen port) and serial1/2 pointed at unused localhost
+ports, so no SITL TCP listener is opened. If Xcode is installed but its license is not accepted, prefix commands with
+`DEVELOPER_DIR=/Library/Developer/CommandLineTools`.
 
 The harness writes app files to `testing/.build/home/Documents` (via `CFFIXED_USER_HOME`) and passes
 `-speech.enabled <false/>` so nothing is spoken and nothing lands in `~/Documents`.
@@ -125,13 +142,16 @@ Legend: **Verdict** CONFIRMED = reproduced by running the app's code; CODE = con
 simulator for the UI part.
 
 ### BUG-001: A failed link hides the NO HEARTBEAT banner, keeps a frozen HUD on screen, and TCP never reconnects
-- **Severity** High · **Category** safety · **Verdict** CONFIRMED
-- **Repro** `testing/scenarios/tcp_drop.sh` (connect over TCP, the fake drone process exits, then restarts 3 s later).
+- **Severity** High · **Category** safety · **Verdict** CONFIRMED headless and **in the real UI** (Mac Catalyst)
+- **Repro** `testing/scenarios/tcp_drop.sh`; UI: `testing/sim/catalyst.sh uitest test_BUG001_tcpDropHidesBanner` (connect over TCP, the fake drone process exits, then restarts 3 s later).
 - **Expected** NO HEARTBEAT banner shown; telemetry marked stale; the app reconnects when the vehicle comes back.
 - **Actual** `state=Failed: … Connection reset by peer hbAlive=false uiLinkAlive=true`: the banner is suppressed. Mode
   "Stabilize", attitude, ARMED/Disarmed and battery stay on screen as if live. No reconnect after the remote comes back
   (`TCP auto-reconnect after remote restart` FAIL). Only the small top-bar caption says "Failed: …".
-- **Evidence** `testing/logs/tcp_drop.harness.log` (CHECK FAIL lines + SNAPSHOT).
+- **Evidence** `testing/logs/tcp_drop.harness.log`; screenshot `testing/evidence/catalyst-BUG001-after-tcp-drop-expect-banner.jpg`:
+  no banner; HUD, "Stabilize", "Disarmed", "3D Fix · 12", "16.4V 88%" and "Link 100%" all look live; only a truncated
+  "Failed: The operation couldn't be c…" caption. Compare `catalyst-B5-silent-expect-red-NO-HEARTBEAT.jpg` (UDP silence:
+  banner shown).
 - **Cause** `App/UI/RootView.swift:49` passes `linkAlive: vehicle.heartbeatAlive || !link.state.isActive`, so any
   non-active state (`.failed`, `.disconnected`) counts as "alive". `App/Link/NetworkTransports.swift:231-232` (TCP
   `isComplete`) and the `.failed` case of the state handler (≈line 185) end the TCP link with no retry (only UDP retries).
@@ -160,7 +180,9 @@ simulator for the UI part.
   `probe_command_overwrite.sh` PASS; the 34 existing tests still pass.
 
 ### BUG-003: Non-finite or huge ATTITUDE/VFR_HUD values are stored unchecked and crash the HUD
-- **Severity** High · **Category** crash · **Verdict** CONFIRMED (model + trap); HUD draw path CODE
+- **Severity** High · **Category** crash · **Verdict** CONFIRMED: **the real app crashes** (Mac Catalyst UI test
+  `test_Z1_BUG003_nanAttitudeDoesNotCrash`; crash report: EXC_BREAKPOINT in `HUDView.body.getter (HUDView.swift:142)`,
+  `testing/evidence/catalyst-crash-frames.txt`)
 - **Repro** `testing/scenarios/nan_values.sh`, `inf_values.sh`, `huge_values.sh`; trap: `probe_hud_label_nan.sh`,
   `probe_hud_label_huge.sh`.
 - **Expected** Invalid values are ignored (keep the last good value, flag the field invalid); the app never crashes.
@@ -175,20 +197,23 @@ simulator for the UI part.
 - **Accept** `nan_values.sh`, `inf_values.sh`, `huge_values.sh` PASS. A unit test feeding ATTITUDE NaN/Inf to `VehicleModel`
   keeps the previous finite values. In the simulator the HUD keeps rendering with the drone on `--fault nan_attitude`.
 
-### BUG-004: Out-of-range GLOBAL_POSITION_INT is accepted and is expected to crash the map
-- **Severity** High · **Category** crash · **Verdict** CONFIRMED (accepted into the model); crash CODE (needs the simulator)
+### BUG-004: Out-of-range GLOBAL_POSITION_INT is accepted and crashes the map
+- **Severity** High · **Category** crash · **Verdict** CONFIRMED: **the real app crashes** (UI test
+  `test_Z2_BUG004_badLatLonDoesNotCrash`; uncaught NSException from `-[MKMapView setCenterCoordinate:animated:]` called at
+  `MapCanvas.swift:139`, `testing/evidence/catalyst-crash-frames.txt`)
 - **Repro** `testing/scenarios/bad_latlon.sh` (lat 200°, lon 210°). Simulator: drone `--fault bad_latlon`, open Flight Data.
 - **Expected** Positions outside ±90/±180 are rejected.
-- **Actual** `lat=200.0 lon=210.0 trail=1`: stored as the vehicle position and added to the trail. `MapCanvas` then calls
-  `MKMapView.setRegion` with that centre, which raises `NSInvalidArgumentException` ("Invalid Region") in UIKit.
+- **Actual** `lat=200.0 lon=210.0 trail=1`: stored as the vehicle position and added to the trail. The map then passes
+  that centre to `MKMapView`, which throws an uncaught exception (SIGABRT): the app dies about a second after connecting.
 - **Cause** `App/Vehicle/VehicleModel.swift:285-297` (only checks `lat != 0 || lon != 0`); `App/Map/MapCanvas.swift:136`
   (`setRegion`), `:138` (`setCenter`), plus the trail polyline.
 - **Fix** In `VehicleModel`, accept only `CLLocationCoordinate2DIsValid`-equivalent ranges (|lat| ≤ 90, |lon| ≤ 180).
   In `MapCanvas`, guard every coordinate with `CLLocationCoordinate2DIsValid` before `setRegion`/`setCenter`/annotations.
-- **Accept** `bad_latlon.sh` PASS. In the simulator with `--fault bad_latlon` the map stays up and shows no vehicle position.
+- **Accept** `bad_latlon.sh` PASS. `test_Z2_BUG004_badLatLonDoesNotCrash` passes (the map stays up and shows no vehicle position.
 
 ### BUG-005: Setup › Flight modes crashes when FLTMODE_CH (or Rover MODE_CH) is 0 = "Disabled"
-- **Severity** High · **Category** crash · **Verdict** CONFIRMED (trap on the exact expression)
+- **Severity** High · **Category** crash · **Verdict** CONFIRMED: **the real app crashes** (UI test
+  `test_Z3_BUG005_flightModesWithChannelDisabled`; EXC_BREAKPOINT in `FlightModesPage.body.getter (SetupView.swift:438)`)
 - **Repro** `testing/scenarios/probe_fltmode_ch0.sh`; end to end `testing/scenarios/param_nan.sh` (the fake vehicle reports
   FLTMODE_CH = 0). Simulator: drone `--fault fltmode_ch0`, wait for params, open Setup › Flight modes.
 - **Expected** The page shows "Mode switch disabled".
@@ -202,7 +227,9 @@ simulator for the UI part.
   helper), `param_nan.sh` check 2 PASS, and the page renders in the simulator with FLTMODE_CH = 0.
 
 ### BUG-006: A long takeoff-altitude entry crashes the Actions tab every time it opens (value persists); no bounds on takeoff/speed/altitude inputs
-- **Severity** High · **Category** crash, safety · **Verdict** CONFIRMED (trap on the exact expression); UI CODE
+- **Severity** High · **Category** crash, safety · **Verdict** CONFIRMED: **the real app crashes** when the stored value is 1e20 (UI test
+  `test_Z4_BUG006_persistedHugeTakeoffAltitude`, launched with `-actions.takeoffAlt 1e20`; EXC_BREAKPOINT in
+  `ActionsView.body.getter (ActionsView.swift:169)`)
 - **Repro** `testing/scenarios/probe_takeoff_alt_huge.sh`. Simulator: Actions › Guided takeoff › type
   `100000000000000000000`, leave the field.
 - **Expected** Input is clamped/rejected (e.g. 1–500 m) and can never crash.
@@ -243,14 +270,52 @@ simulator for the UI part.
 - **Expected** A prominent, hard-to-miss warning (HUD banner + red battery item) at the vehicle's BATT_LOW/CRT levels, for
   failsafe STATUSTEXT (severity ≤ WARNING, e.g. "Battery failsafe", "Radio failsafe", "EKF failsafe") and for
   GPS loss, independent of speech. Desktop MP shows these in the HUD.
-- **Actual** Only `SpeechAlerts` reacts (≤ 20 % remaining, `App/Vehicle/SpeechAlerts.swift:45`). The top-bar Battery item
-  has no colour (`App/UI/RootView.swift:122-124`), the HUD has no battery input, and STATUSTEXT warnings only appear in the
+- **Actual** `SpeechAlerts` reacts (≤ 20 % remaining, `App/Vehicle/SpeechAlerts.swift:45`), and **the Quick tab's
+  Battery tile turns red below 20 %** (`App/UI/TelemetryViews.swift:33-34`; screenshot
+  `testing/evidence/catalyst-BUG008-critical-battery.jpg`). That's all: the tile is hidden whenever another tab is open, the
+  top-bar Battery item has no colour (`App/UI/RootView.swift:122-124`), the HUD has no battery input, and STATUSTEXT warnings only appear in the
   Messages tab. With `BATT_MONITOR` = voltage only, `battery_remaining` is −1 and nothing ever fires.
 - **Fix** Add `VehicleModel.warnings` (battery low/critical from SYS_STATUS remaining and from BATT_LOW_VOLT/BATT_CRT_VOLT
   params, failsafe STATUSTEXT ≤ WARNING held for 10 s, GPS fix < 3 while armed, EKF flags). Render it as a banner over the
   HUD (like NO HEARTBEAT) and colour the battery item orange/red. Speech stays as an extra.
 - **Accept** A harness/unit test feeding SYS_STATUS 13.0 V with BATT_CRT_VOLT 13.2 sets a critical warning. In the
   simulator, `fault battery_critical on` shows a red banner within 2 s with speech disabled.
+
+### BUG-033: Mission upload to real ArduPilot fails or is misreported on a lossy link
+- **Severity** High · **Category** data, safety (ELRS) · **Verdict** CONFIRMED on ArduCopter 4.7.3 SITL (4/4 lossy runs)
+- **Repro** `testing/scenarios/sitl_lossy.sh` (30 % loss, 80±60 ms), `sitl_lossy_b.sh` (30 %, other seed), `sitl_lossy_c.sh`
+  (15 % loss, 40±20 ms). Trace the run's tlog: `python3 testing/tools/tlog_trace.py "testing/.build/home/Documents/logs/<newest>.tlog"`.
+- **Expected** The 13-item mission is stored and the banner says so (desktop MP and MAVProxy complete these uploads).
+- **Actual** `Mission transfer failed: Invalid sequence` / `…: Error` / `…: No answer from vehicle`. Traces:
+  - `>> ITEM 0` · (request for 1 lost) · `>> ITEM 0` (timeout resend) · `<< MISSION_ACK 13 (INVALID_SEQUENCE)` → app aborts.
+    ArduPilot sends this ACK for a duplicate and **keeps the upload open**.
+  - `<< REQUEST 12` · `>> ITEM 12` · (final ACK 0 lost) · `>> ITEM 12` ×2 · `<< MISSION_ACK 1 (ERROR)` → app reports failure,
+    but the vehicle had already stored all items. ArduPilot does **not** re-ACK a duplicate final item.
+  The same upload through the fake drone at 30 % loss passed, because the fake (like `SimulatedMissionVehicle` in
+  `MissionTests.swift`) re-ACKs duplicates. CLAUDE.md's note "the simulated vehicle re-ACKs a duplicate final item, as
+  ArduPilot does" is wrong for 4.7.3.
+- **Cause** `Packages/MAVLinkKit/Sources/MAVLinkKit/MissionProtocol.swift:288-291` (any MISSION_ACK ≠ 0 ends the upload) and
+  `:313-317` (timeout resends the last requested item, which provokes INVALID_SEQUENCE).
+- **Fix** During upload, ignore MISSION_ACK 13 (INVALID_SEQUENCE) and keep waiting for the next request. After the last item
+  was sent, treat a timeout or MISSION_ACK 1 (ERROR) as "unknown": verify with MISSION_REQUEST_LIST, and if MISSION_COUNT
+  equals the uploaded count, report success ("verified by read-back"). Optionally download and compare the items. Change
+  `SimulatedMissionVehicle` to behave like ArduPilot (INVALID_SEQUENCE on duplicates, no re-ACK) so unit tests cover this.
+- **Accept** `sitl_lossy.sh`, `sitl_lossy_b.sh`, `sitl_lossy_c.sh` PASS. A MissionTests case with the ArduPilot-like simulated
+  vehicle at 30 % loss completes 200/200 uploads.
+
+### BUG-034: Bundled parameter metadata is out of date for ArduCopter 4.7 (42 % of parameters have no description, range or options)
+- **Severity** Medium · **Category** data, UX · **Verdict** CONFIRMED on SITL 4.7.3
+- **Repro** `testing/scenarios/sitl_param_file_roundtrip.sh`, then `python3 testing/tools/param_meta_coverage.py`.
+- **Actual** 577 of 1370 parameters are missing from the metadata (e.g. `ACRO_RP_RATE_TC`, `AHRS_OPTIONS`, `ARMING_NEED_LOC`, and all
+  `MAVn_*` stream rates). For those the editor shows no description, units, range warning, value list or bitmask, and no
+  reboot-required flag. 4.7 renamed `SRn_*` to `MAVn_*`: the metadata has 70 `SRn_` entries and no `MAVn_` ones.
+  **TESTING.md C3 and README.md step 4 tell testers to search `SR6_`, which doesn't exist on 4.7.3** (use `MAV6_`).
+  CLAUDE.md's bench notes say `SR6_*` were set on the user's 4.7.3 board; re-check on the hardware which names it really has.
+- **Cause** `App/Resources/ParamMeta/*.json` generated by `tools/gen_param_meta.py` from an older `ParameterMetaDataBackup.xml`.
+- **Fix** Regenerate the metadata from ArduPilot's 4.7 `apm.pdef.xml` (`Tools/autotest/param_metadata/param_parse.py`), or
+  load it per firmware version. Update TESTING.md C3 and README to `MAV6_`. Add a CI check that the metadata covers ≥ 95 % of a
+  SITL parameter dump.
+- **Accept** `param_meta_coverage.py` reports ≥ 95 % for a 4.7.3 SITL dump; TESTING.md and README mention `MAV6_`.
 
 ### BUG-009: A malformed ACCELCAL_VEHICLE_POS (COMMAND_LONG 42429) from the vehicle crashes the app
 - **Severity** Medium · **Category** crash · **Verdict** CONFIRMED end to end
@@ -290,8 +355,9 @@ simulator for the UI part.
 - **Accept** `fly_here.sh` all checks PASS.
 
 ### BUG-012: After Disconnect (or starting a replay) the last ARMED state, mode, attitude and battery stay on screen with no stale marker
-- **Severity** Medium · **Category** safety, UX · **Verdict** CONFIRMED
-- **Repro** `testing/scenarios/stale_after_disconnect.sh`.
+- **Severity** Medium · **Category** safety, UX · **Verdict** CONFIRMED headless and in the real UI
+- **Repro** `testing/scenarios/stale_after_disconnect.sh`; screenshot `testing/evidence/catalyst-BUG013-disconnect-armed.jpg`
+  ("Disconnected", yet the top bar shows **ARMED**, 3D Fix, 16.4 V, Link 100 %, and the HUD shows ARMED).
 - **Expected** After Disconnect, values are cleared or visibly greyed out ("—"), and no banner says the vehicle is OK.
 - **Actual** `armed=true mode=Stabilize uiLinkAlive=true battery=16.396` after Disconnect: the top bar still shows ARMED in
   red, the HUD keeps the last attitude, and the NO HEARTBEAT banner is suppressed (see BUG-001 for the cause).
@@ -301,16 +367,15 @@ simulator for the UI part.
 - **Accept** `stale_after_disconnect.sh` PASS.
 
 ### BUG-013: No confirmation for Disconnect, Reconnect or "Replay a log" while the vehicle is armed
-- **Severity** Medium · **Category** safety, UX · **Verdict** CODE
-- **Repro** Simulator: connect to `fake_drone.py --tcp-server 5799`, arm in Actions, open the Connect sheet, tap a log under
-  Replay: the live link closes immediately. Headless equivalent: `stale_after_disconnect.sh` (disconnect while armed is
+- **Severity** Medium · **Category** safety, UX · **Verdict** CONFIRMED in the real UI (Disconnect); Reconnect/Replay by code
+- **Repro** `testing/sim/catalyst.sh uitest test_BUG013_disconnectWhileArmedAsksFirst` (arms, opens Link, taps Disconnect:
+  the link drops at once; screenshot `testing/evidence/catalyst-BUG013-disconnect-armed.jpg`). Headless equivalent: `stale_after_disconnect.sh` (disconnect while armed is
   accepted silently).
 - **Expected** "Vehicle is ARMED. Disconnect anyway?" confirmation.
 - **Cause** `App/UI/ConnectView.swift:113` (Disconnect), `:117` (Reconnect), `:134` and `:149` (`link.startReplay`), and
   `LinkManager.startReplay` calls `disconnect()` first (`App/Link/LinkManager.swift:80`).
 - **Fix** If `vehicle.armed && vehicle.heartbeatAlive`, show a destructive confirmation before these four actions.
-- **Accept** XCUITest (once identifiers exist, see TEST-031): with an armed fake vehicle, tapping Disconnect shows an alert
-  and Cancel keeps the link up.
+- **Accept** `test_BUG013_disconnectWhileArmedAsksFirst` passes (a confirmation appears, so "Disconnected" is not shown).
 
 ### BUG-014: The Servo tab's "motor outputs are blocked" guard is fail-open until parameters have downloaded
 - **Severity** Medium · **Category** safety · **Verdict** CONFIRMED (logic)
@@ -318,7 +383,8 @@ simulator for the UI part.
   unknown → buttons enabled).
 - **Expected** Overrides stay disabled until `SERVOn_FUNCTION` is known (ELRS downloads take ~1 min).
 - **Actual** `isMotor` returns false when the function is unknown, so Low/Mid/High/Toggle are enabled for motor outputs.
-  (ArduPilot itself refuses DO_SET_SERVO on motor functions, so this is defence in depth, but the UI promises a block.)
+  (Confirmed on SITL 4.7.3: ArduPilot refuses DO_SET_SERVO on a motor output with "ServoRelayEvent: Channel 1 is already in
+  use", and the app shows "Failed. Check Messages". So this is defence in depth, but the UI promises a block.)
 - **Cause** `App/UI/FlightDataTabs.swift:170-172`.
 - **Fix** Treat unknown as blocked: `guard let f = … else { return true }`; show "waiting for parameters".
 - **Accept** `servo_before_params.sh` PASS.
@@ -333,14 +399,16 @@ simulator for the UI part.
   `gpsFixType < 2`. Render the stale marker grey with a "GPS lost" label.
 - **Accept** `gps_loss.sh` PASS (with the check adapted to the new `positionStale` flag).
 
-### BUG-016: The Link % in the top bar treats reordering and jitter as packet loss
+### BUG-016: The Link % in the top bar is wrong: reordering counts as loss, and a dead link still shows 100 %
 - **Severity** Medium · **Category** UX · **Verdict** CONFIRMED
 - **Repro** `testing/scenarios/reorder.sh` (0 % real loss → Link 55.6 %); `lossy_link.sh` (30 % loss + 80±60 ms jitter →
   `rx=579 lost=7640`, so Link shows about 7 % while about 70 % of packets were delivered).
-- **Expected** About 100 % for a reordered-but-complete stream, about 70 % for 30 % loss.
+- **Also (UI)** During a total outage the top bar keeps showing **Link 100 %** (`testing/evidence/catalyst-B5-silent-expect-red-NO-HEARTBEAT.jpg`):
+  the figure is cumulative since connect (`App/UI/RootView.swift` `linkQuality`), so it never drops when nothing arrives.
+- **Expected** About 100 % for a reordered-but-complete stream, about 70 % for 30 % loss, and "—"/0 % while no packets arrive.
 - **Cause** `Packages/MAVLinkKit/Sources/MAVLinkKit/MAVLinkFraming.swift:229-237`: after a late packet, `last` moves
   backwards, so the next in-order packet counts the gap again.
-- **Fix** Ignore packets whose sequence is "behind" (gap ≥ 128 means late/duplicate: don't update `last`). Better, keep a
+- **Fix** Compute Link % over a sliding window (e.g. last 5 s) and show "—" when nothing arrived in it. Ignore packets whose sequence is "behind" (gap ≥ 128 means late/duplicate: don't update `last`). Better, keep a
   256-bit window of seen sequence numbers per source and compute loss over a sliding window (as MAVProxy does).
 - **Accept** `reorder.sh` PASS (≥ 90 %); a new parser unit test with a shuffled sequence 0…99 reports 0 lost.
 
@@ -384,12 +452,16 @@ simulator for the UI part.
   out after retries). A vehicle NaN parameter appears in "differ" forever (`changes=["TEST_P001"]`).
 - **Cause** `Packages/MAVLinkKit/Sources/MAVLinkKit/ParameterProtocol.swift:304`; `ParameterStore.differences` (`App/Vehicle/
   ParameterStore.swift:183`) compares with `!=`.
-- **Fix** `guard let v = Float(valueText), v.isFinite`; in `differences`, treat both-NaN as equal.
-- **Accept** `test_BUG020_*` passes; both scenarios PASS.
+- **Also** `ParameterStore.set` sends NaN to the vehicle. SITL 4.7.3 ignores it, so the write sits pending and then times
+  out (`sitl_param_set.sh`: `pending=["MAV1_EXTRA1"]`).
+- **Fix** `guard let v = Float(valueText), v.isFinite`; refuse non-finite values in `ParameterStore.set`/`setMany`; in
+  `differences`, treat both-NaN as equal.
+- **Accept** `test_BUG020_*` passes; both scenarios and `sitl_param_set.sh` PASS.
 
 ### BUG-021: Accelerometer calibration stalls on a lossy link (single unrepeated confirm/result, no timeout, no feedback)
-- **Severity** Medium · **Category** UX (ELRS) · **Verdict** CONFIRMED against the fake vehicle; ArduPilot's resend behaviour to be
-  confirmed with SITL (`sitl_accel_cal` once SITL is built)
+- **Severity** Medium · **Category** UX (ELRS) · **Verdict** CONFIRMED against the fake vehicle; SITL 4.7.3 (`sitl_accel_probe.sh`)
+  confirms that ArduPilot re-requests the position every second (10 requests in 10 s), so only the lost confirm and the lost
+  final result remain
 - **Repro** `testing/scenarios/accel_cal_lossy.sh` (25 % loss; user taps once per position) and `accel_cal_lossy_retap.sh`
   (user taps again every 6 s). The fake vehicle re-requests the position every second, as ArduPilot does.
 - **Expected** The calibration finishes on a 25 % lossy link, or tells the user to tap again / retry.
@@ -405,7 +477,8 @@ simulator for the UI part.
 - **Accept** `accel_cal_lossy.sh` and `accel_cal_lossy_retap.sh` PASS (calibration ends successful within 60 s).
 
 ### BUG-022: The geofence page applies an altitude limit below the current altitude while flying, with no warning
-- **Severity** Medium · **Category** safety · **Verdict** CONFIRMED (same writes as the page, sent through `ParameterStore`)
+- **Severity** Medium · **Category** safety · **Verdict** CONFIRMED on the fake drone and on SITL 4.7.3 (`sitl_fence.sh`: a 15 m limit
+  applied at 25.8 m → "Max Alt fence breached" → RTL at once)
 - **Repro** `testing/scenarios/fence_breach.sh` (take off to 40 m, apply 20 m with the page's writes).
 - **Expected** While armed, refuse a limit below the current altitude (or confirm: "Vehicle is at 26 m; a 20 m fence breaches
   immediately and triggers RTL/Land"). Also show the breach prominently (see BUG-008).
@@ -547,45 +620,45 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
 
 | TESTING.md item | How covered | Status |
 |---|---|---|
-| A1 Install, landscape, Connect sheet | needs an iPad/Sideloadly; no simulator | N/T (no Xcode) |
-| A2 Diagnostics version/build | UI; build stamp comes from CI | N/T (no Xcode) |
+| A1 Install, landscape, Connect sheet | Mac Catalyst UI: app launches with the Connect sheet (`test_A1_B1_launchAndConnect`, `testing/evidence/catalyst-A1-connect-sheet.jpg`); Sideloadly install/landscape on iPad N/T | PARTIAL |
+| A2 Diagnostics version/build | UI; build stamp comes from CI (not stamped in a local build) | NOT TESTED |
 | A3 Documents folders | harness: `DocumentsStore` creates logs/params/missions/tiles | PASS |
 | B1 Connect, firmware/mode/GPS shown | `connect`, `connect_udp_listen`, `connect_udp_connect` | PASS. ELRS kind N/T (Wi-Fi-only + real 10.0.0.1 backpack); backpack JSON → BUG-023 |
-| B2 HUD moves, no NO ATTITUDE banner | `connect` (attitude flowing, not stale); HUD drawing N/T | PARTIAL; NaN/Inf → BUG-003 |
+| B2 HUD moves, no NO ATTITUDE banner | `connect` (attitude flowing); Mac Catalyst UI: HUD, tapes and map render live (`catalyst-B1-connected.jpg`) | PASS; NaN/Inf crash → BUG-003 |
 | B3 Values plausible | `connect` vs fake drone truth | PASS |
 | B4 ESC telemetry | `esc_telemetry` (4 ESCs, 0 RPM disarmed, RPM + temperature armed) | PASS |
-| B5 Link drop banner + voice | `link_loss`, `link_loss_udp`, `blackout` PASS; `tcp_drop` FAIL; voice N/T | FAIL → BUG-001 |
+| B5 Link drop banner + voice | `link_loss`, `link_loss_udp`, `blackout` PASS; UI: red NO HEARTBEAT shown on silence and cleared after (`test_B5_…`); `tcp_drop` + UI `test_BUG001_…` FAIL; voice N/T | FAIL → BUG-001 (Link % → BUG-016) |
 | B6 Heartbeat sources, message counts | `connect` | PASS |
-| C1 Download all params | `params` (400), `params_1500`, `lossy_link` (30 % loss: 9.5 s) | PASS |
-| C2 Save .param | `param_file_roundtrip` | PASS |
-| C3 Write + confirm + set back | `param_set` | PASS |
+| C1 Download all params | `params` (400), `params_1500`, `lossy_link` (30 % loss: 9.5 s); SITL `sitl_params` (1370 in < 1 s), `sitl_lossy` (1370 at 30 % loss in 20 s) | PASS (metadata gap → BUG-034) |
+| C2 Save .param | `param_file_roundtrip`, `sitl_param_file_roundtrip` | PASS |
+| C3 Write + confirm + set back | `param_set`, `sitl_param_set` (MAV1_EXTRA1) | PASS (NaN → BUG-020; `SR6_` in the instructions → BUG-034) |
 | C4 Options/bitmask metadata | `params` (metadata loaded); editor UI N/T | PARTIAL |
 | C5 Load file → 0 differ | `param_file_roundtrip` PASS; NaN case FAIL | FAIL → BUG-020 |
-| D1 Pre-arm checks | `prearm_check` (MAV_CMD_RUN_PREARM_CHECKS accepted, PreArm text in Messages), `reject_arm` | PASS (button UI N/T) |
-| D2 Accelerometer calibration | `accel_cal` PASS (positions 1–6, success), `accel_cal_fail` PASS; `accel_cal_lossy(_retap)` FAIL; `accelcal_live_nan` CRASH | FAIL → BUG-009, BUG-021 |
+| D1 Pre-arm checks | `prearm_check`, `sitl_prearm_check` (MAV_CMD_RUN_PREARM_CHECKS accepted), `reject_arm` | PASS (button UI N/T) |
+| D2 Accelerometer calibration | `accel_cal` PASS (positions 1–6, success), `accel_cal_fail` PASS; `accel_cal_lossy(_retap)` FAIL; `accelcal_live_nan` CRASH; `sitl_accel_probe` (real position re-requests at 1 Hz) | FAIL → BUG-009, BUG-021 |
 | D3 Compass calibration | `compass_cal` PASS (progress, reports, accept); `compass_cal_fail` FAIL | PASS (UX: BUG-028) |
 | D4 Radio calibration | UI only; code review of the capture/save logic | N/T (no Xcode); BUG-029 |
-| D5 Flight modes page | `probe_fltmode_ch0`, `param_nan` | FAIL → BUG-005 |
+| D5 Flight modes page | `probe_fltmode_ch0`, `param_nan`, UI `test_Z3_BUG005_…` (real crash) | FAIL → BUG-005 |
 | D6 Motor test | `motor_test` (single and sequence MAV_CMD_DO_MOTOR_TEST accepted); props-off toggle + armed guard by code review | PARTIAL (UI N/T) |
 | D7 Geofence altitude | `geofence_apply` (page's writes: FENCE_ALT_MAX 60, ENABLE 1, TYPE bit 0) | PASS |
 | D8 Battery monitor calibration | code review | FAIL → BUG-018 |
-| D9 DataFlash list/download | `log_download` | PASS (memory: BUG-019) |
+| D9 DataFlash list/download | `log_download`; `sitl_log_download` (3 logs listed, 3 MB downloaded at ~100 kB/s, size matches) | PASS (memory: BUG-019) |
 | E1 Offline map download | MapKit/UIKit + internet tile servers | N/T |
 | E2 Offline imagery | as E1 | N/T |
 | E3 Plan editing | store logic via `fence_rally` add; editor UI N/T | PARTIAL; editor crash → BUG-007 |
-| E4 Write/Clear/Read mission | `mission_roundtrip`, `large_mission` (700), `lossy_link` | PASS |
+| E4 Write/Clear/Read mission | `mission_roundtrip`, `large_mission` (700), `lossy_link`; SITL `sitl_mission_roundtrip` PASS; SITL lossy uploads FAIL | FAIL → BUG-033 |
 | E5 Save .waypoints | `mission_roundtrip` (save + parse); desktop MP check N/T | PASS; corrupt file → BUG-007, huge → BUG-010 |
 | E6 Survey grid | existing unit tests + `probe_survey_*` | PARTIAL; huge → BUG-010 |
-| E7 Fence + rally round trip | `fence_rally` | PASS |
+| E7 Fence + rally round trip | `fence_rally`, `sitl_fence_rally` | PASS |
 | F1 Checklist | UI only | N/T (no Xcode) |
-| F2 Quick mode + banner | `mode_change` PASS (incl. 3-tap spam); `no_ack` FAIL | FAIL → BUG-017 |
-| F3 Arm/disarm + refusal | `arm_disarm`, `reject_arm` PASS; confirmation dialogs present (code) | PASS (lossy-link caveat: BUG-002) |
-| F4 Servo override, motors greyed | `servo_before_params` | FAIL → BUG-014 |
+| F2 Quick mode + banner | `mode_change`, `sitl_mode_change` PASS (incl. 3-tap spam); `no_ack` FAIL | FAIL → BUG-017 |
+| F3 Arm/disarm + refusal | `arm_disarm`, `reject_arm`, `sitl_arm` (arms in GUIDED; in-flight disarm refused and explained) PASS; confirmation dialogs present (code) | PASS (lossy-link caveat: BUG-002) |
+| F4 Servo override, motors greyed | `servo_before_params` FAIL; `sitl_arm` shows ArduPilot refuses motor-output overrides | FAIL → BUG-014 (defence in depth) |
 | F5 Replay, play/pause, seek, speed | `replay` (+ garbage/empty files) | PASS (BUG-026) |
 | G1 Manual flight, trail | simulated in `auto_mission` (trail drawn) | PARTIAL (no real flight) |
-| G2 Auto mission, current WP | `auto_mission` (waypoints reached, RTL, land, disarm) | PASS (simulated) |
+| G2 Auto mission, current WP | `auto_mission` (fake), `sitl_auto` (real ArduCopter: AUTO, waypoints reached, RTL, land, disarm) | PASS (simulated) |
 | G3 Fly here | `fly_here` (vehicle flies there; rejection mis-reported) | FAIL → BUG-011 |
-| G4 Altitude fence breach | `fence_breach` (breach → RTL/Land shown, message logged) | PASS (simulated); applying in flight → BUG-022 |
+| G4 Altitude fence breach | `fence_breach` (fake), `sitl_fence` (real: "Max Alt fence breached" → RTL) | PASS (simulated); applying in flight → BUG-022 |
 | G5 Share report + log | tlog recorded (`connect`); share sheet N/T | PARTIAL |
 
 | Extra area | Scenarios | Status |
@@ -600,7 +673,7 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
 | Rejected commands / timeouts | `reject_arm` PASS, `no_ack` FAIL, `probe_command_overwrite` FAIL | FAIL → BUG-002, BUG-017 |
 | Mid-mission mode change | `mode_change_mid_mission` | PASS |
 | Disconnect during arm/takeoff | `disconnect_on_arm` | PASS |
-| Reboot | `reboot` | PASS |
+| Reboot | `reboot`, `sitl_reboot` | PASS |
 | Multiple vehicles / other GCS / compid change | `second_vehicle`, `other_gcs`, `compid_switch` | PASS |
 | Rapid repeated actions | `connect_spam`, `arm_disarm` (arm, arm, disarm), `mode_change` (spam) | PASS on a clean link |
 | Disconnect mid-transfer | `disconnect_mid_transfer` | PASS |
@@ -609,7 +682,7 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
 | Long session | `long_session` (5 min at default rates: RSS 32.2 → 32.5 MB; tlog 390 KB ≈ 4.7 MB/h) | PASS |
 | Large mission | `large_mission` (700 items, 0.1 s each way) | PASS |
 | Input validation (files, fields) | `probe_*` | FAIL → BUG-006, -007, -010, -020 |
-| Backgrounding, rotation, memory warning | iOS lifecycle | N/T (no Xcode) |
+| Backgrounding, rotation, memory warning | iOS lifecycle; tests exist (`test_lifecycle_*`) but are compiled out on Mac Catalyst | N/T (no iPad Simulator) |
 | Fuzzing (random valid-CRC frames, all 349 ids, NaN/Inf-biased floats, random sysids) | `probe_fuzz_pipeline.sh` (300k frames), `probe_fuzz_pipeline_skip_known.sh` (3 × 300k, skipping ids 76/39) | CRASH on ids 76 (BUG-009) and 39 (BUG-007); no other traps in 900k frames; out-of-range values stored (BUG-003/-004) |
 | Data races (Thread Sanitizer) | 8 network/replay scenarios with `HARNESS_SANITIZE=thread` | FAIL → BUG-032 (4 reports in 2 scenarios) |
 | Memory errors (AddressSanitizer) | `HARNESS_SANITIZE=address`: connect, connect_spam, replay, malformed, lossy_link_corrupt, log_download, fuzz | PASS (no reports) |
@@ -621,17 +694,13 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
 
 ## 6. Not tested and why
 
-- **Everything that needs the iPad Simulator / XCUITest** (A1, A2, D4, D6, E1, E2, F1, view layout, rotation,
-  backgrounding, memory warnings, gestures, on-screen banners, screenshots): the test Mac has no Xcode, only the Command
-  Line Tools. `testing/sim/sim.sh` and the XCUITest suite `testing/sim/UITests/BreakTestUITests.swift` (11 tests: A1/B1, B5, BUG-001,
-  -003, -004, -005, -006, -008, -013, background/foreground, rotation; built from the test-only spec `testing/sim/project.yml`)
-  are written but have **not** been run. No screenshots or videos exist in
-  `testing/artifacts/` for the same reason. To finish: install Xcode + an iOS runtime, `brew install xcodegen`, then run
-  the simulator repro lines in BUG-001, -003, -004, -005, -006, -007, -012, -013, -018, -022.
-- **ArduCopter SITL**: `testing/sitl/build_sitl.sh` (Copter-4.7.3) and the `sitl_smoke`, `sitl_params`, `sitl_arm` scenarios
-  are ready. The shallow clone with submodules was still downloading when the session ended (the network was shared with a
-  large download), so no SITL results are reported; the partial download was deleted to free disk space. Once built, run `python3 testing/scenarios/run.py sitl`. `sitl_arm` also
-  checks the in-flight disarm refusal and DO_SET_SERVO on a motor output against real ArduPilot.
+- **iPad-only UI** (A1 install/landscape, iPad layout, touch gestures such as long-press "Fly here", rotation,
+  backgrounding, memory warnings, the Files app, on-screen keyboards): the iOS simulator runtime (~8 GB) was declined. The UI
+  ran instead as a Mac Catalyst app (`testing/sim/catalyst.sh`, 9 tests). The full iPad suite (`testing/sim/sim.sh uitest`,
+  11 tests incl. `test_lifecycle_*`) is ready for when a runtime is installed: `xcodebuild -downloadPlatform iOS`, then
+  `testing/sim/sim.sh boot && testing/sim/sim.sh uitest`.
+- **SITL coverage gaps**: SITL ran 17 scenarios (section 5). Not run on SITL: compass calibration (SITL can't rotate), the
+  accel calibration to completion (same reason: only the request/confirm protocol was probed), ESC telemetry.
 - **ExpressLRS link type**: it is Wi-Fi-only (`requiredInterfaceType = .wifi`), so it can't run over loopback, and the
   ground rules forbid binding a fake backpack to a LAN interface. The backpack JSON handling was probed offline (BUG-023).
 - **BLE transport, Local Network permission, speech output, Files app, share sheets**: platform/hardware features with no
@@ -658,3 +727,13 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
 - Thread Sanitizer build (`HARNESS_SANITIZE=thread`): data races on transport callbacks → BUG-032.
 - Protocol edge cases (NO_SPACE, out-of-range request, 16-char names, changing param_count): app handling correct.
   AddressSanitizer over 7 scenarios incl. fuzzing: no reports.
+- SITL (ArduCopter 4.7.3 built natively after patching a macOS linker issue): 17 scenarios. Confirmed BUG-014 (ArduPilot
+  rejects motor-output overrides itself), BUG-020 (NaN write hangs), BUG-021 (ArduPilot re-requests positions at 1 Hz),
+  BUG-022 (immediate breach on real firmware). New: BUG-033 (lossy mission upload fails or is misreported; 4/4 runs) and
+  BUG-034 (42 % of 4.7.3 params have no metadata; `SRn_` renamed `MAVn_`).
+- The runner gained `-j N` (parallel workers with their own ports, SITL instance and Documents folder).
+- Mac Catalyst UI: the unmodified app builds as a Mac app from a test-only spec (`testing/sim/project-catalyst.yml`; the UI
+  test runner is re-signed ad-hoc). 9 XCUITests vs the fake drone: real crashes for BUG-003 (HUDView.swift:142), BUG-004
+  (MKMapView setCenterCoordinate, MapCanvas.swift:139), BUG-005 (SetupView.swift:438), BUG-006 (ActionsView.swift:169);
+  BUG-001, -012, -013 confirmed on screen; BUG-008 corrected (the Quick tile turns red below 20 %); BUG-016 extended (Link %
+  stays 100 % while the link is dead). Screenshots: `testing/evidence/`.

@@ -19,7 +19,7 @@ enum Scenarios {
         "compid_switch": compidSwitch, "long_session": longSession, "sitl_smoke": sitlSmoke,
         "link_loss_proxy": linkLossProxy, "sitl_arm": sitlArm, "servo_before_params": servoBeforeParams,
         "esc_telemetry": escTelemetry, "prearm_check": prearmCheck, "accel_cal": accelCal, "compass_cal": compassCal,
-        "geofence_apply": geofenceApply, "fence_breach": fenceBreach, "motor_test": motorTest, "mission_edge": missionEdge, "param_edge": paramEdge, "probe:fuzz_pipeline": Fuzz.run,
+        "geofence_apply": geofenceApply, "fence_breach": fenceBreach, "motor_test": motorTest, "mission_edge": missionEdge, "sitl_auto": sitlAuto, "sitl_accel_probe": sitlAccelProbe, "sitl_fence": sitlFence, "param_edge": paramEdge, "probe:fuzz_pipeline": Fuzz.run,
     ].merging(Probes.all, uniquingKeysWith: { a, _ in a })
 
     // MARK: B. connection
@@ -468,10 +468,13 @@ enum Scenarios {
         guard c.connectAndWaitForVehicle() else { return }
         c.link.logs.refresh()
         c.waitUntil(10) { !c.link.logs.listing && !c.link.logs.entries.isEmpty }
-        c.check("D9 list", c.link.logs.entries.count == 2, "\(c.link.logs.entries.map { "\($0.id):\($0.size)" })")
-        guard let e = c.link.logs.entries.first else { return }
+        let want = Int(c.args.extra["expect-logs"] ?? "2") ?? 2
+        c.check("D9 list", want < 0 ? !c.link.logs.listing : c.link.logs.entries.count == want,
+                "\(c.link.logs.entries.map { "\($0.id):\($0.size)" }) msg=\(c.link.logs.message ?? "nil")")
+        guard let e = c.link.logs.entries.min(by: { $0.size < $1.size }) else { return }
         c.link.logs.start(e)
-        c.waitUntil(20) { c.link.logs.downloading == nil }
+        c.waitUntil(Double(c.args.extra["dl-timeout"] ?? "20") ?? 20) { c.link.logs.downloading == nil }
+        c.metric("log_bytes", e.size); c.metric("log_rate_Bps", Int(c.link.logs.rate))
         let file = c.link.logs.directory.appendingPathComponent(c.link.logs.fileName(e))
         let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? -1
         c.check("D9 .bin written with right size", size == Int(e.size), "size=\(size) expected=\(e.size) msg=\(c.link.logs.message ?? "nil")")
@@ -812,5 +815,78 @@ enum Scenarios {
             c.waitUntil(6) { c.link.params.pendingNames.isEmpty }
             c.check("16-char name writable", c.link.params.params[name]?.value == 43, c.link.params.banner ?? "nil")
         }
+    }
+
+    // MARK: SITL-only
+
+    static func waitSITLReady(_ c: Ctx) -> Bool {
+        guard c.connectAndWaitForVehicle(timeout: 30) else { return false }
+        c.waitParams(timeout: 90)
+        let ok = c.waitUntil(120) { c.vehicle.gpsFixType >= 3 && (c.vehicle.ekfFlags & 0x0010) != 0 }  // EKF pos horiz abs
+        c.check("SITL GPS + EKF ready", ok != nil, "fix=\(c.vehicle.gpsFixType) ekf=0x\(String(c.vehicle.ekfFlags, radix: 16))")
+        return ok != nil
+    }
+
+    static func armWithRetries(_ c: Ctx) -> Bool {
+        for _ in 0..<8 {
+            c.link.commands.arm(true)
+            if c.waitUntil(8, { c.vehicle.armed }) != nil { return true }
+            c.pump(4)
+        }
+        c.note("arm refused: \(c.link.commands.lastResult ?? "nil") msgs=\(c.vehicle.messages.prefix(4).map(\.text))")
+        return false
+    }
+
+    static func sitlAuto(_ c: Ctx) {
+        guard waitSITLReady(c) else { return }
+        c.link.params.set("AUTO_OPTIONS", 7) // allow takeoff in AUTO without raising throttle (no RC in SITL)
+        c.waitUntil(5) { c.link.params.pendingNames.isEmpty }
+        c.link.mission.setItems(.mission, sampleMission(c, n: 2))
+        c.link.mission.write(.mission)
+        c.waitUntil(15) { c.link.mission.busy == nil }
+        c.check("mission written to SITL", (c.link.mission.banner ?? "").contains("accepted"), c.link.mission.banner ?? "nil")
+        c.link.commands.setMode(4, name: "Guided"); c.waitUntil(5) { c.vehicle.customMode == 4 }
+        guard armWithRetries(c) else { return c.check("SITL arms", false) }
+        c.link.commands.setMode(3, name: "Auto")
+        c.check("G2 AUTO engaged on SITL", c.waitUntil(8) { c.vehicle.customMode == 3 } != nil, "\(c.vehicle.modeName) \(c.link.commands.lastResult ?? "")")
+        let wp = c.waitUntil(120) { (c.vehicle.lastReachedWaypoint ?? 0) >= 3 }
+        c.check("G2 SITL reaches the waypoints", wp != nil, "lastReached=\(String(describing: c.vehicle.lastReachedWaypoint)) cur=\(c.vehicle.currentWaypoint) alt=\(c.vehicle.relativeAltitude)")
+        c.check("G1 trail drawn", c.vehicle.trail.count > 5, "\(c.vehicle.trail.count)")
+        let landed = c.waitUntil(180) { !c.vehicle.armed }
+        c.check("SITL RTL + land + disarm", landed != nil, "mode=\(c.vehicle.modeName) alt=\(c.vehicle.relativeAltitude)")
+    }
+
+    /// How does real ArduPilot drive the 6-position accel cal? (BUG-021: does it re-request positions?)
+    static func sitlAccelProbe(_ c: Ctx) {
+        guard c.connectAndWaitForVehicle(timeout: 30) else { return }
+        c.pump(5)
+        let before = c.vehicle.messageCounts["COMMAND_LONG"] ?? 0
+        c.link.calibration.startAccel()
+        c.waitUntil(10) { if case .place = c.link.calibration.accel { return true } else { return false } }
+        c.pump(10) // do NOT confirm: count position re-requests
+        let requests = (c.vehicle.messageCounts["COMMAND_LONG"] ?? 0) - before
+        c.metric("accelcal_position_requests_in_10s", requests)
+        c.note("state=\(c.link.calibration.accel) msgs=\(c.vehicle.messages.prefix(3).map(\.text))")
+        c.check("ArduPilot re-requests the position (so a lost request recovers)", requests >= 3, "\(requests) COMMAND_LONG in 10 s")
+        c.link.calibration.confirmPosition()
+        c.pump(6)
+        c.note("after confirm: \(c.link.calibration.accel) msgs=\(c.vehicle.messages.prefix(3).map(\.text))")
+        c.link.calibration.confirmPosition() // duplicate tap for the old position: ArduPilot must ignore it
+        c.pump(4)
+        c.note("after duplicate tap: \(c.link.calibration.accel) banner=\(c.link.commands.lastResult ?? "nil")")
+    }
+
+    static func sitlFence(_ c: Ctx) {
+        guard waitSITLReady(c) else { return }
+        c.link.commands.setMode(4, name: "Guided"); c.waitUntil(5) { c.vehicle.customMode == 4 }
+        guard armWithRetries(c) else { return c.check("SITL arms", false) }
+        c.link.commands.command(MissionCmd.takeoff, params: [0, 0, 0, 0, 0, 0, 30], label: "Takeoff to 30 m")
+        c.waitUntil(60) { c.vehicle.relativeAltitude > 25 }
+        c.note("applying a 15 m altitude fence at \(String(format: "%.1f", c.vehicle.relativeAltitude)) m (FencePage.limitAltitude writes)")
+        c.link.params.setMany(fenceWrites(c, alt: 15))
+        let act = c.waitUntil(20) { c.vehicle.customMode == 6 || c.vehicle.customMode == 9 }
+        c.check("G4 real ArduPilot fence action shown", act != nil, "mode=\(c.vehicle.modeName) msgs=\(c.vehicle.messages.prefix(4).map(\.text))")
+        c.note("BUG-022 on real firmware: \(act != nil ? "immediate breach after applying the fence in flight" : "no breach")")
+        c.waitUntil(150) { !c.vehicle.armed }
     }
 }

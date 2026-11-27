@@ -135,7 +135,7 @@ tried on the iPad: the map editing, calibrations, motor test and replay need a r
   ATS allows it via `NSAllowsLocalNetworking`; if the read fails, the typed ports are used.
 - MAVLinkKit `MissionProtocol.swift`: `MissionSession` (download/upload for mission/fence/rally,
   retries, MISSION_REQUEST legacy), `WaypointFile` (QGC WPL 110), `Geo`, `SurveyGrid`. Tests are in
-  `MissionTests.swift`; the simulated vehicle re-ACKs a duplicate final item, as ArduPilot does.
+  `MissionTests.swift`; the simulated vehicle re-ACKs a duplicate final item (ArduPilot 4.7.3 does NOT: see BUG-033 in TESTING_RESULTS.md).
 - App: `MissionStore` (home = item 0, fence groups get param1 = vertex count), `Map/MapCanvas.swift`
   (MKMapView: markers, drag, overlays), `Map/TileCache.swift` (Esri/OSM cache + Esri area download,
   capped at 6000 tiles; OSM area download is disabled per their tile policy), `PlanView`,
@@ -168,6 +168,21 @@ tried on the iPad: the map editing, calibrations, motor test and replay need a r
   `feedback/<their user id>` = {build, ipad, link, vehicle, general, results: {A1: {s: pass|part|fail|skip, n: note}},
   updatedAt}. Read them with ArtifactData `list` collection `feedback` (owner/editors read all, testers only their own).
 - Next: collect results; analyse any shared iPad .tlog (B2 = the HUD over ELRS) and fix failures.
+
+## Break-test against simulated drones (2026-11-27, branch `testing/break-test-2026-11-27`)
+
+- Results and fix list: `TESTING_RESULTS.md` (32 bugs + 2 test gaps, each with a one-command repro and acceptance
+  criteria). Kit: `testing/` (see `testing/README.md`); it needs only macOS Command Line Tools + python3.
+- This Mac *does* have macOS now (the "no Mac" ground rule above was written on Windows): `testing/harness/` compiles the
+  app's real `App/Link`, `App/Vehicle`, `App/Storage` headless, so app-layer logic can be tested before pushing.
+- ArduCopter 4.7.3 SITL builds with `testing/sitl/build_sitl.sh` (patches a macOS linker issue). Against real 4.7.3:
+  lossy mission uploads fail (BUG-033). The note above that "the simulated vehicle re-ACKs a duplicate final item, as
+  ArduPilot does" is **wrong**: 4.7.3 answers a duplicate with INVALID_SEQUENCE / ERROR and never re-ACKs. 4.7 also renamed
+  `SRn_*` to `MAVn_*`; the bundled param metadata predates that (BUG-034).
+- The real UI runs on this Mac as Mac Catalyst (`testing/sim/catalyst.sh build && testing/sim/catalyst.sh uitest`); 4 crashes
+  (BUG-003…-006) reproduce there. Use it to check SwiftUI changes before pushing; CI stays the IPA build.
+- Fix first: BUG-001 (link failure hides the banner), BUG-002 (ACK matching), BUG-033 (mission upload), then the crash
+  items BUG-003…-007.
 
 ## Backlog after the ELRS link works
 

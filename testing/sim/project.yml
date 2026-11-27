@@ -18,7 +18,7 @@ targets:
       base:
         PRODUCT_NAME: MissionPlannerPad
         PRODUCT_BUNDLE_IDENTIFIER: io.github.missionplannerpad.app
-        INFOPLIST_FILE: ../../Config/Info.plist
+        INFOPLIST_FILE: $(SRCROOT)/../../../Config/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         TARGETED_DEVICE_FAMILY: "2"
         SWIFT_VERSION: "5.0"
