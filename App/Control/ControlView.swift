@@ -24,7 +24,10 @@ struct ControlView: View {
                         ? "Sending MANUAL_CONTROL at 10 Hz. Turns off by itself if the link drops."
                         : "Off. Nothing is sent until you enable it (every session).")
                     .font(.caption).foregroundColor(manual.enabled ? .orange : .secondary)
-                LabeledContent("Source", value: manual.gamepadName ?? "On-screen sticks")
+                if let pad = manual.gamepadName {
+                    Toggle("Use game controller (\(pad))", isOn: $manual.useGamepad)
+                }
+                LabeledContent("Source", value: manual.usingGamepad ? (manual.gamepadName ?? "") : "On-screen sticks")
                 HStack {
                     Text("Gain")
                     Slider(value: $manual.gain, in: 0.1...1.0)
@@ -32,7 +35,7 @@ struct ControlView: View {
                 }
                 axisBars
                 buttonsRow
-                if manual.gamepadName == nil {
+                if !manual.usingGamepad {
                     HStack(spacing: 24) {
                         Spacer()
                         JoystickPad(value: $manual.leftStick, title: kind == .sub ? "Heave / yaw" : "Throttle")
@@ -55,7 +58,7 @@ struct ControlView: View {
                 bar("Z heave", Double(f.z - 500) / 500, "\(f.z)")
                 bar("R yaw", Double(f.r) / 1000, "\(f.r)")
             } else {
-                bar("X throttle", Double(f.x) / 1000, "\(f.x)")
+                bar("Z throttle", Double(f.z) / 1000, "\(f.z)")
                 bar("Y steering", Double(f.y) / 1000, "\(f.y)")
             }
         }

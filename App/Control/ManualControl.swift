@@ -43,6 +43,14 @@ final class ManualControl: ObservableObject {
     @Published var leftStick = CGPoint.zero
     @Published var rightStick = CGPoint.zero
     @Published private(set) var gamepadName: String?
+    /// Use the connected game controller when there is one (off = on-screen sticks even with a pad).
+    // bool(forKey:) also reads a "-manual.useGamepad NO" launch argument (the simulator CI uses it).
+    @Published var useGamepad: Bool = (UserDefaults.standard.object(forKey: "manual.useGamepad") == nil
+        ? true : UserDefaults.standard.bool(forKey: "manual.useGamepad")) {
+        didSet { UserDefaults.standard.set(useGamepad, forKey: "manual.useGamepad") }
+    }
+    /// True when the sticks come from a game controller rather than the on-screen pads.
+    var usingGamepad: Bool { useGamepad && gamepadName != nil }
     /// The frame that is (or would be) sent, for the live bars.
     @Published private(set) var frame = Frame()
 
@@ -122,7 +130,7 @@ final class ManualControl: ObservableObject {
 
     private func readInputs() -> Inputs {
         var i = Inputs()
-        if let g = pad?.extendedGamepad {
+        if useGamepad, let g = pad?.extendedGamepad {
             i.lx = Double(g.leftThumbstick.xAxis.value)
             i.ly = Double(g.leftThumbstick.yAxis.value)
             i.rx = Double(g.rightThumbstick.xAxis.value)
