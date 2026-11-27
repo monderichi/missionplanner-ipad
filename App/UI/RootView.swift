@@ -83,6 +83,7 @@ struct RootView: View {
 struct StatusBar: View {
     @EnvironmentObject var link: LinkManager
     @EnvironmentObject var speech: SpeechAlerts
+    @State private var showDiagnostics = false
     @EnvironmentObject var vehicle: VehicleModel
     @Binding var showConnect: Bool
     @Binding var screen: RootView.Screen
@@ -123,6 +124,8 @@ struct StatusBar: View {
                     ? String(format: "%.1fV %ld%%", vehicle.batteryVoltage, vehicle.batteryRemaining)
                     : String(format: "%.1fV", vehicle.batteryVoltage))
             item("Link", linkQuality)
+            Button { showDiagnostics = true } label: { Image(systemName: "info.circle") }
+                .accessibilityLabel("Diagnostics and feedback")
             Button { speech.enabled.toggle() } label: {
                 Image(systemName: speech.enabled ? "speaker.wave.2.fill" : "speaker.slash")
             }
@@ -131,6 +134,7 @@ struct StatusBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(.bar)
+        .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
     }
 
     private var linkColor: Color {

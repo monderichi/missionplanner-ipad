@@ -27,7 +27,7 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         TARGETED_DEVICE_FAMILY: "2" # iPad only
         SWIFT_VERSION: "5.0"
-        MARKETING_VERSION: "0.2.0"
+        MARKETING_VERSION: "0.4.0"
         CURRENT_PROJECT_VERSION: "1"
         ENABLE_BITCODE: NO
         # Signing is done by Sideloadly with your Apple ID, not here.

@@ -24,6 +24,7 @@ xcodebuild \
   -destination 'generic/platform=iOS' \
   -derivedDataPath "$BUILD/DerivedData" \
   CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+  CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER:-1}" GIT_COMMIT="${GITHUB_SHA:0:7}" \
   build | tee "$BUILD/xcodebuild.log" | grep -E "error:|warning: .*deprecated|BUILD (SUCCEEDED|FAILED)" || true
 
 # grep's exit status is ignored above; check the real build result

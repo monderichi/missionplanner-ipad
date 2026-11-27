@@ -98,6 +98,9 @@ final class VehicleModel: ObservableObject {
 
     @Published private(set) var lastReachedWaypoint: Int?
 
+    /// Every HEARTBEAT source seen on the link ("sys/comp" -> "TYPE, autopilot N"), for Diagnostics.
+    @Published private(set) var heartbeatSources: [String: String] = [:]
+
     // ESC_TELEMETRY_1_TO_4 / 5_TO_8 (DShot / BLHeli telemetry), index 0 = motor 1
     struct ESCInfo: Equatable {
         var rpm: Int = 0
@@ -168,6 +171,7 @@ final class VehicleModel: ObservableObject {
         lastReachedWaypoint = nil
         lastAttitude = nil
         attitudeStale = false
+        heartbeatSources = [:]
     }
 
     func clearTrail() { trail = [] }
@@ -230,6 +234,9 @@ final class VehicleModel: ObservableObject {
             // gimbals, OSDs, companions etc. on other serial ports (often autopilot=GENERIC), and
             // locking onto one of those froze the HUD. MAVList keys vehicles by sysid/compid and the
             // flight controller is component 1 (MAV_COMP_ID_AUTOPILOT1).
+            let src = "\(packet.systemID)/\(packet.componentID)"
+            let desc = "\(MAVType(rawValue: hb.type).map { "\($0)" } ?? "type \(hb.type)"), autopilot \(hb.autopilot)"
+            if heartbeatSources[src] != desc { heartbeatSources[src] = desc }
             guard Self.isVehicleAutopilot(hb) else { return false }
             let preferThis = packet.componentID == 1 && packet.systemID == systemID && componentID != 1
             if systemID == nil || !heartbeatAlive || preferThis {

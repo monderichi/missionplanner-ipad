@@ -2,7 +2,9 @@ name: Build Sideloadly IPA
 
 on:
   push:
+    paths-ignore: ['**.md', 'docs/**']   # docs-only pushes don't need a macOS build
   pull_request:
+    paths-ignore: ['**.md', 'docs/**']
   workflow_dispatch:
 
 jobs:
