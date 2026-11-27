@@ -1,6 +1,6 @@
 # Agent notes: Mission Planner for iPad
 
-Read `README.md` (what works, build, install) and `CLAUDE_PROMPTS.md` (the phase 1–7 plan) first.
+Read `PROGRESS.md` (latest snapshot and next steps), `README.md` (what works, build, install) and `CLAUDE_PROMPTS.md` (the phase 1–7 plan) first.
 This file is the running handoff log: what's in flight, what was learned on the bench, and what to
 do next. Update it when you finish a piece of work.
 
@@ -169,6 +169,21 @@ tried on the iPad: the map editing, calibrations, motor test and replay need a r
   updatedAt}. Read them with ArtifactData `list` collection `feedback` (owner/editors read all, testers only their own).
 - Next: collect results; analyse any shared iPad .tlog (B2 = the HUD over ELRS) and fix failures.
 
+## Batch 2 + simulator CI (2026-11-27)
+
+- Workflow: Opus plans/reviews, Sonnet sub-agents implement (user preference). Four parallel agents with
+  disjoint file ownership worked well; Opus fixed compile risks (`for (k, var v)` patterns, Slider trailing
+  closures, typed tuple closures) and wired cross-file glue.
+- CI simulator job (`[sim]` in the commit message or a manual run): `scripts/sim_screenshots.sh` + `tools/fake_vehicle.py`
+  publish screenshots, the fake vehicle log and the app's own .tlogs to the `ci-screenshots` branch
+  (`git fetch origin ci-screenshots; git archive --format=zip ...`).
+- Green: `903bf32` (CI run 46063788920, 2.23 MB IPA). Batch 2 = graph tab, MAVLink inspector, custom Quick
+  tiles, setup pages (servo out, optional hardware, gyro/baro/airspeed cal, fixed-yaw compass cal, planner
+  settings), ADS-B on the map, gimbal/camera, long-press menu (fly/ROI/measure), circle/orbit, DataFlash
+  review (`DataFlash.swift` + tests).
+- TODO: simulator screenshots of the new screens (add shots for -MPTab graph and the new setup pages), ADS-B in
+  fake_vehicle.py, use PlannerSettings units in the screens, and real-iPad testing (tester page has 0 results).
+
 ## Break-test against simulated drones (2026-11-27, branch `testing/break-test-2026-11-27`)
 
 - Results and fix list: `TESTING_RESULTS.md` (32 bugs + 2 test gaps, each with a one-command repro and acceptance
@@ -190,3 +205,21 @@ Phases 4–7 from `CLAUDE_PROMPTS.md`: map upgrades (trail, offline tiles), the 
 (MISSION_ITEM_INT up/download), setup/calibration wizards, and tlog replay. Multi-vehicle (MAVList)
 is still single-vehicle. With ELRS, keep in mind the link is narrow (1:2 telemetry ratio): use
 `.narrowLink` configs, and don't raise the stream rates much.
+
+## UGV / ROV batch (2026-11-27)
+
+- `4aeb00b` (sim run 17) + `87c6a3f`: ArduRover and ArduSub support. Setup pages are filtered per firmware
+  (`SetupPage.applies(to:)`), with a Rover setup page (cruise, steering, failsafe) and an ROV setup page (depth,
+  water temperature, leak + clear, FRAME_CONFIG, JS_GAIN_*). Per-firmware failsafe/tuning lists, plus rover/boat
+  map markers.
+- Manual control (`App/Control/ManualControl.swift`, Control tab): MANUAL_CONTROL at 10 Hz, opt-in per session,
+  turns off when the link is lost. The source is a game controller (GameController) or the on-screen sticks.
+  - Sub: x forward, y lateral, z 0..1000 (500 = neutral), r yaw.
+  - Rover: y = steering, z = throttle (−1000..1000), checked against ArduRover source.
+  - The simulator reports a "Gamepad", so the "Use game controller" toggle (`manual.useGamepad`) is set to NO in
+    the sim shots.
+- `tools/fake_vehicle.py --type copter|rover|boat|sub`; `tools/audit_params.py` checks the parameter names used by
+  the setup pages against the metadata. The sim runs shots 30–34 (rover) and 40–43 (sub), and copies the tlogs
+  after all passes.
+- Still TODO: real-iPad / real-vehicle testing of manual control (never sent to a real rover/sub), PlannerSettings
+  units in the screens.

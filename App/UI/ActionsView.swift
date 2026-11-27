@@ -32,6 +32,13 @@ struct ActionsView: View {
             .map { ModeItem(id: $0.key, name: $0.value) }
     }
 
+    /// Quick-mode buttons: the shared per-firmware list, plus Loiter (5) for Rover/Boat, which has it but the list omits it.
+    private var quickModes: [UInt32] {
+        var m = ArduPilotModes.quickModes(for: vehicle.vehicleType)
+        if MAVType(rawValue: vehicle.vehicleType)?.firmware == .rover, !m.contains(5) { m.insert(5, at: 1) }
+        return m
+    }
+
     private var ready: Bool { commands.isAttached && vehicle.heartbeatAlive }
     private var isCopter: Bool { MAVType(rawValue: vehicle.vehicleType)?.firmware == .copter }
     private var guidedMode: UInt32? { ArduPilotModes.guided(for: vehicle.vehicleType) }
@@ -41,7 +48,7 @@ struct ActionsView: View {
         VStack(alignment: .leading, spacing: 14) {
             GroupBox("Flight mode") {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 92))], spacing: 8) {
-                    ForEach(ArduPilotModes.quickModes(for: vehicle.vehicleType), id: \.self) { m in
+                    ForEach(quickModes, id: \.self) { m in
                         let name = ArduPilotModes.name(customMode: m, vehicleType: vehicle.vehicleType)
                         Button(name) { commands.setMode(m, name: name) }
                             .buttonStyle(.bordered)
@@ -141,6 +148,8 @@ struct ActionsView: View {
                 Button { confirmReboot = true } label: { Label("Reboot autopilot", systemImage: "power") }
                     .disabled(!ready || vehicle.armed)
             }
+
+            GimbalView()
 
             if let result = commands.lastResult {
                 Label(result, systemImage: commands.lastResultOK ? "checkmark.circle" : "exclamationmark.triangle")

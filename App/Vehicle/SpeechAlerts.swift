@@ -40,6 +40,11 @@ final class SpeechAlerts: ObservableObject {
                 self?.say(m.text, minInterval: 60) // ArduPilot repeats PreArm text every 30 s
             }
             .store(in: &bag)
+        v.$leakDetected.removeDuplicates()
+            .sink { [weak self] leak in
+                if leak { self?.say("Leak detected", minInterval: 20) }
+            }
+            .store(in: &bag)
         v.$batteryRemaining.removeDuplicates()
             .sink { [weak self] pct in
                 guard let self, pct >= 0, pct <= 20, Date().timeIntervalSince(self.lastBattery) > 60 else { return }

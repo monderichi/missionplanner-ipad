@@ -18,6 +18,10 @@ struct HUDView: View {
     var linkAlive: Bool
     /// Heartbeats arrive but ATTITUDE doesn't: the horizon would be frozen, so say so.
     var attitudeStale: Bool = false
+    /// ArduSub: the right box shows depth (positive down) instead of altitude.
+    var isSub: Bool = false
+    var depth: Double = 0
+    var leakDetected: Bool = false
 
     // computed (not stored) so they don't make the memberwise init private
     private var sky: Color { Color(red: 0.20, green: 0.45, blue: 0.85) }
@@ -37,19 +41,26 @@ struct HUDView: View {
             let big = max(w, h) * 4
             horizon.fill(Path(CGRect(x: -big, y: -big, width: 2 * big, height: big)), with: .color(sky))
             horizon.fill(Path(CGRect(x: -big, y: 0, width: 2 * big, height: big)), with: .color(ground))
-            horizon.stroke(line(from: CGPoint(x: -big, y: 0), to: CGPoint(x: big, y: 0)), with: .color(.white), lineWidth: 2)
+
+            // horizon line + pitch ladder: clipped (in screen space) so they never draw over the heading tape
+            var ladder = ctx
+            ladder.clip(to: Path(CGRect(x: 0, y: 26, width: w, height: max(0, h - 26))))
+            ladder.translateBy(x: cx, y: cy)
+            ladder.rotate(by: .degrees(-roll))
+            ladder.translateBy(x: 0, y: pitch * pxPerDeg)
+            ladder.stroke(line(from: CGPoint(x: -big, y: 0), to: CGPoint(x: big, y: 0)), with: .color(.white), lineWidth: 2)
 
             // pitch ladder
             for p in stride(from: -90, through: 90, by: 5) where p != 0 {
                 let y = -Double(p) * pxPerDeg
                 let major = p % 10 == 0
                 let half = major ? w * 0.12 : w * 0.06
-                horizon.stroke(line(from: CGPoint(x: -half, y: y), to: CGPoint(x: half, y: y)),
+                ladder.stroke(line(from: CGPoint(x: -half, y: y), to: CGPoint(x: half, y: y)),
                                with: .color(.white.opacity(0.9)), lineWidth: major ? 1.5 : 1)
                 if major {
                     let label = Text("\(p)").font(.system(size: 11, weight: .semibold)).foregroundColor(.white)
-                    horizon.draw(label, at: CGPoint(x: -half - 14, y: y))
-                    horizon.draw(label, at: CGPoint(x: half + 14, y: y))
+                    ladder.draw(label, at: CGPoint(x: -half - 14, y: y))
+                    ladder.draw(label, at: CGPoint(x: half + 14, y: y))
                 }
             }
 
@@ -84,7 +95,7 @@ struct HUDView: View {
             ctx.stroke(plane, with: .color(.yellow), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
 
             // heading tape
-            ctx.fill(Path(CGRect(x: 0, y: 0, width: w, height: 26)), with: .color(.black.opacity(0.35)))
+            ctx.fill(Path(CGRect(x: 0, y: 0, width: w, height: 26)), with: .color(.black.opacity(0.6)))
             let pxPerHdg: Double = w / 90
             let names = [0: "N", 45: "NE", 90: "E", 135: "SE", 180: "S", 225: "SW", 270: "W", 315: "NW"]
             let start = Int((heading - 45).rounded(.down)), end = Int((heading + 45).rounded(.up))
@@ -112,9 +123,9 @@ struct HUDView: View {
                      at: CGPoint(x: leftBox.midX, y: leftBox.midY - 6))
             ctx.draw(Text("GS m/s  AS \(String(format: "%.1f", airspeed))").font(.system(size: 8)).foregroundColor(.white.opacity(0.8)),
                      at: CGPoint(x: leftBox.midX, y: leftBox.maxY - 8))
-            ctx.draw(Text(String(format: "%.1f", altitude)).font(.system(size: 18, weight: .bold).monospacedDigit()).foregroundColor(.white),
+            ctx.draw(Text(String(format: "%.1f", isSub ? depth : altitude)).font(.system(size: 18, weight: .bold).monospacedDigit()).foregroundColor(.white),
                      at: CGPoint(x: rightBox.midX, y: rightBox.midY - 6))
-            ctx.draw(Text("ALT m  VS \(String(format: "%+.1f", climbRate))").font(.system(size: 8)).foregroundColor(.white.opacity(0.8)),
+            ctx.draw(Text("\(isSub ? "DEPTH" : "ALT") m  VS \(String(format: "%+.1f", climbRate))").font(.system(size: 8)).foregroundColor(.white.opacity(0.8)),
                      at: CGPoint(x: rightBox.midX, y: rightBox.maxY - 8))
 
             // armed / mode
@@ -127,6 +138,13 @@ struct HUDView: View {
                 let banner = CGRect(x: w * 0.15, y: cy - 50 - 30, width: w * 0.7, height: 30)
                 ctx.fill(Path(roundedRect: banner, cornerRadius: 6), with: .color(.orange.opacity(0.9)))
                 ctx.draw(Text("NO ATTITUDE DATA · re-requesting").font(.system(size: 14, weight: .heavy)).foregroundColor(.black),
+                         at: CGPoint(x: banner.midX, y: banner.midY))
+            }
+
+            if leakDetected {
+                let banner = CGRect(x: w * 0.15, y: cy + 56, width: w * 0.7, height: 32)
+                ctx.fill(Path(roundedRect: banner, cornerRadius: 6), with: .color(.red))
+                ctx.draw(Text("LEAK DETECTED").font(.system(size: 18, weight: .heavy)).foregroundColor(.white),
                          at: CGPoint(x: banner.midX, y: banner.midY))
             }
 

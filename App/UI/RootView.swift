@@ -14,7 +14,7 @@ struct RootView: View {
     @State private var screen = Screen.data
 
     enum Tab: String, CaseIterable, Identifiable {
-        case quick = "Quick", actions = "Actions", checklist = "Checklist", status = "Status", servo = "Servo", messages = "Messages"
+        case quick = "Quick", actions = "Actions", checklist = "Checklist", status = "Status", servo = "Servo", control = "Control", graph = "Graph", messages = "Messages"
         var id: String { rawValue }
     }
 
@@ -35,7 +35,29 @@ struct RootView: View {
             if link.isReplaying { ReplayBar() }
         }
         .sheet(isPresented: $showConnect) { ConnectView() }
-        .onAppear { if !link.state.isActive { showConnect = true } }
+        .onAppear { applyLaunchArguments() }
+    }
+
+    /// Test automation (CI simulator screenshots): `-MPAutoConnect tcp:127.0.0.1:5760`, `-MPScreen plan`,
+    /// `-MPTab status`. Launch arguments land in UserDefaults; without them the app behaves normally.
+    private func applyLaunchArguments() {
+        let d = UserDefaults.standard
+        if let s = d.string(forKey: "MPScreen")?.lowercased(),
+           let sc = Screen.allCases.first(where: { "\($0)" == s || $0.rawValue.lowercased() == s }) {
+            screen = sc
+        }
+        if let t = d.string(forKey: "MPTab")?.lowercased(), let tb = Tab.allCases.first(where: { "\($0)" == t }) {
+            tab = tb
+        }
+        if let auto = d.string(forKey: "MPAutoConnect"), !link.state.isActive {
+            let parts = auto.split(separator: ":").map(String.init)
+            if parts.count == 3, let port = UInt16(parts[2]) {
+                let kind: LinkKind = parts[0] == "udp" ? .udpConnect : .tcp
+                link.connect(kind: kind, host: parts[1], port: port, bleDevice: nil)
+                return
+            }
+        }
+        if !link.state.isActive { showConnect = true }
     }
 
     private var flightData: some View {
@@ -47,7 +69,8 @@ struct RootView: View {
                                 altitude: vehicle.relativeAltitude, climbRate: vehicle.climbRate,
                                 armed: vehicle.armed, mode: vehicle.modeName,
                                 linkAlive: vehicle.heartbeatAlive || !link.state.isActive,
-                                attitudeStale: vehicle.attitudeStale)
+                                attitudeStale: vehicle.attitudeStale,
+                                isSub: vehicle.isSub, depth: vehicle.depth, leakDetected: vehicle.leakDetected)
                             .frame(height: min(geo.size.height * 0.48, 340))
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 6) {
@@ -65,6 +88,8 @@ struct RootView: View {
                             case .actions: ScrollView { ActionsView() }
                             case .checklist: ChecklistView()
                             case .servo: ScrollView { ServoView() }
+                            case .control: ScrollView { ControlView() }
+                            case .graph: GraphView()
                             case .status: StatusListView()
                             case .messages: MessagesView()
                             }
@@ -135,6 +160,12 @@ struct StatusBar: View {
         .padding(.vertical, 6)
         .background(.bar)
         .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
+        .onAppear {
+            if UserDefaults.standard.bool(forKey: "MPShowDiagnostics")
+                || UserDefaults.standard.bool(forKey: "MPShowInspector") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6) { showDiagnostics = true }
+            }
+        }
     }
 
     private var linkColor: Color {

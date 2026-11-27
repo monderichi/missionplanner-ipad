@@ -25,6 +25,9 @@ final class LinkManager: ObservableObject {
     let replay = ReplayController()
     let speech = SpeechAlerts()
     let logs = LogStore()
+    let history = TelemetryHistory()
+    let inspector = MessageInspector()
+    let manual = ManualControl()
     /// True while a .tlog is being replayed (nothing is sent, no sessions attached).
     @Published private(set) var isReplaying = false
 
@@ -73,6 +76,13 @@ final class LinkManager: ObservableObject {
         calibration.vehicle = vehicle
         speech.observe(vehicle)
         logs.send = { [weak self] m in self?.send(any: m) }
+        history.start(vehicle: vehicle)
+        manual.vehicle = vehicle
+        manual.send = { [weak self] m in self?.send(m) }
+        manual.linkActive = { [weak self] in
+            guard let self else { return false }
+            return self.state.isActive && !self.isReplaying
+        }
     }
 
     /// Plays a .tlog through the normal pipeline (read-only).
@@ -172,6 +182,7 @@ final class LinkManager: ObservableObject {
     }
 
     func disconnect() {
+        manual.setEnabled(false) // one neutral frame while the transport still exists
         connectGeneration += 1 // cancels a pending backpack lookup
         heartbeatTimer?.cancel()
         heartbeatTimer = nil
@@ -254,6 +265,7 @@ final class LinkManager: ObservableObject {
             if sendHeartbeat { self.send(MAV.Heartbeat(customMode: 0, type: MAVType.gcs.rawValue, autopilot: MAVAutopilot.invalid,
                                     baseMode: 0, systemStatus: MAVState.active.rawValue, mavlinkVersion: 3)) }
             self.vehicle.tick()
+            PlannerSettings.shared.setConnected(self.vehicle.heartbeatAlive) // keep screen awake while connected (Planner settings)
             self.attitudeWatchdog()
             self.ioQueue.async {
                 let s = self.parser.stats
@@ -317,6 +329,7 @@ final class LinkManager: ObservableObject {
             guard let self else { return }
             var newVehicle = false
             for p in packets {
+                self.inspector.record(p)
                 if p.messageID == MAV.RadioStatus.mavInfo.id {
                     self.vehicle.handleRadio(p)
                 }

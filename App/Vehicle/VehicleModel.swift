@@ -70,6 +70,12 @@ final class VehicleModel: ObservableObject {
     @Published private(set) var radioRSSI: Int?
     @Published private(set) var radioRemoteRSSI: Int?
 
+    // ArduSub: SCALED_PRESSURE2 is the external (water) pressure/temperature sensor
+    /// Water temperature in degC from SCALED_PRESSURE2 (nil until received).
+    @Published private(set) var waterTemperature: Double?
+    /// Set when a STATUSTEXT mentions a leak (ArduSub "Leak Detected"); cleared by a "cleared" text or reset.
+    @Published private(set) var leakDetected = false
+
     @Published private(set) var messages: [StatusMessage] = []
     @Published private(set) var messageCounts: [String: Int] = [:]
 
@@ -115,6 +121,18 @@ final class VehicleModel: ObservableObject {
     @Published private(set) var batteryConsumedMah: Int?
     @Published private(set) var cellVoltages: [Double] = []
 
+    // ADSB_VEHICLE (from the FC's ADS-B receiver or any other component), keyed by ICAO address
+    struct Traffic: Equatable {
+        var callsign: String
+        var position: GeoPoint
+        var altitude: Double    // m (ADSB altitude is mm)
+        var heading: Double     // deg
+        var speed: Double       // m/s
+        var lastSeen: Date
+    }
+    @Published private(set) var traffic: [UInt32: Traffic] = [:]
+    static let trafficTimeout: TimeInterval = 60
+
     private var statusChunks: [UInt16: String] = [:]
     static let heartbeatTimeout: TimeInterval = 5
     static let attitudeTimeout: TimeInterval = 3
@@ -122,6 +140,12 @@ final class VehicleModel: ObservableObject {
     /// Heartbeats arrive but no ATTITUDE for a few seconds: the HUD would be frozen.
     @Published private(set) var attitudeStale = false
     static let maxMessages = 300
+
+    /// True when the heartbeat says the vehicle is a submarine (ArduSub).
+    var isSub: Bool { MAVType(rawValue: vehicleType)?.firmware == .sub }
+
+    /// Depth in metres, positive down. ArduSub reports altitude relative to the surface (negative below).
+    var depth: Double { isSub ? -relativeAltitude : 0 }
 
     var modeName: String {
         systemID == nil ? "—" : ArduPilotModes.name(customMode: customMode, vehicleType: vehicleType)
@@ -172,9 +196,14 @@ final class VehicleModel: ObservableObject {
         lastAttitude = nil
         attitudeStale = false
         heartbeatSources = [:]
+        traffic = [:]
+        leakDetected = false
+        waterTemperature = nil
     }
 
     func clearTrail() { trail = [] }
+
+    func clearLeak() { leakDetected = false }
 
     private func updateESCs(base: Int, rpm: [UInt16], temp: [UInt8], volt: [UInt16], curr: [UInt16]) {
         var list = escs
@@ -213,6 +242,10 @@ final class VehicleModel: ObservableObject {
         if alive != heartbeatAlive { heartbeatAlive = alive }
         let stale = alive && (lastAttitude.map { now.timeIntervalSince($0) > Self.attitudeTimeout } ?? true)
         if stale != attitudeStale { attitudeStale = stale }
+        if !traffic.isEmpty {
+            let fresh = traffic.filter { now.timeIntervalSince($0.value.lastSeen) < Self.trafficTimeout }
+            if fresh.count != traffic.count { traffic = fresh }
+        }
     }
 
     /// Heartbeat from a flight controller (not a GCS, gimbal, camera, OSD, radio...).
@@ -253,6 +286,21 @@ final class VehicleModel: ObservableObject {
             lastHeartbeat = Date()
             if !heartbeatAlive { heartbeatAlive = true }
             return newVehicle
+        }
+
+        // ADS-B traffic comes from any component (FC or an external receiver): before the sysid guard.
+        if packet.messageID == MAV.AdsbVehicle.mavInfo.id {
+            if let m = packet.decode(MAV.AdsbVehicle.self), m.lat != 0 || m.lon != 0 {
+                let name = MAVString.decode(m.callsign).trimmingCharacters(in: .whitespaces)
+                traffic[m.ICAOAddress] = Traffic(
+                    callsign: name.isEmpty ? String(format: "%06X", m.ICAOAddress) : name,
+                    position: GeoPoint(latitude: Double(m.lat) / 1e7, longitude: Double(m.lon) / 1e7),
+                    altitude: Double(m.altitude) / 1000,
+                    heading: Double(m.heading) / 100,
+                    speed: Double(m.horVelocity) / 100,
+                    lastSeen: Date())
+            }
+            return false
         }
 
         // STATUSTEXT from any component of our vehicle (or anyone before we lock on).
@@ -311,6 +359,10 @@ final class VehicleModel: ObservableObject {
             sensorsPresent = m.onboardControlSensorsPresent
             sensorsEnabled = m.onboardControlSensorsEnabled
             sensorsHealthy = m.onboardControlSensorsHealth
+
+        case MAV.ScaledPressure2.mavInfo.id:
+            guard let m = packet.decode(MAV.ScaledPressure2.self) else { break }
+            waterTemperature = Double(m.temperature) / 100
 
         case MAV.NavControllerOutput.mavInfo.id:
             guard let m = packet.decode(MAV.NavControllerOutput.self) else { break }
@@ -404,6 +456,11 @@ final class VehicleModel: ObservableObject {
             statusChunks[st.id] = nil
         }
         let sev = MAVSeverity(rawValue: st.severity) ?? .info
+        let lower = text.lowercased()
+        if lower.contains("leak") {
+            let cleared = lower.contains("clear")
+            if leakDetected == cleared { leakDetected = !cleared }
+        }
         messages.insert(StatusMessage(date: Date(), severity: sev, text: text), at: 0)
         if messages.count > Self.maxMessages { messages.removeLast(messages.count - Self.maxMessages) }
     }

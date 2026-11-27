@@ -304,6 +304,35 @@ final class MissionStore: ObservableObject {
         return points.count
     }
 
+    /// Mission Planner Auto WP > Circle. Either `points` waypoints per turn around `center`
+    /// (starting due north of it), or one LOITER_TURNS item at the centre (the real ArduPilot orbit:
+    /// param1 = turns, param3 = radius, negative = counter-clockwise). Returns the items added.
+    func addCircle(center: GeoPoint, radius: Double, points: Int, altitude: Float, clockwise: Bool,
+                   turns: Int, asLoiterTurns: Bool) -> Int {
+        guard radius > 0, turns >= 1 else { return 0 }
+        ensureHome(fallback: center)
+        var list = mission
+        if asLoiterTurns {
+            list.append(MissionItem(frame: defaultFrame, command: MissionCmd.loiterTurns, param1: Float(turns),
+                                    param3: clockwise ? Float(radius) : -Float(radius),
+                                    latitude: center.latitude, longitude: center.longitude, altitude: altitude))
+            setItems(.mission, list)
+            return 1
+        }
+        let n = max(3, points)
+        var added = 0
+        for step in 0..<(n * turns) {
+            let frac = Double(step) / Double(n) * 2 * Double.pi
+            let theta = clockwise ? frac : -frac        // bearing from north, clockwise positive
+            let p = Geo.fromLocal(x: radius * sin(theta), y: radius * cos(theta), origin: center)
+            list.append(MissionItem(frame: defaultFrame, command: MissionCmd.waypoint, latitude: p.latitude,
+                                    longitude: p.longitude, altitude: altitude))
+            added += 1
+        }
+        setItems(.mission, list)
+        return added
+    }
+
     /// ArduPilot fence polygons: param1 of every vertex = vertex count of its polygon
     /// (consecutive vertices of the same kind form one polygon).
     static func numberFenceGroups(_ items: [MissionItem]) -> [MissionItem] {

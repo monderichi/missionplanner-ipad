@@ -9,11 +9,11 @@ import SwiftUI
 
 enum MapEditTarget: Equatable {
     case none
-    case mission, fence, rally, survey
+    case mission, fence, rally, survey, circle
 }
 
 final class MapItemAnnotation: NSObject, MKAnnotation {
-    enum Kind: Equatable { case vehicle, home, mission, fence, rally, survey }
+    enum Kind: Equatable { case vehicle, home, mission, fence, rally, survey, traffic, measure }
     let kind: Kind
     var index: Int
     @objc dynamic var coordinate: CLLocationCoordinate2D // KVO: MapKit moves the marker when this changes
@@ -35,6 +35,42 @@ final class MissionPolyline: MKPolyline {}
 final class SurveyPolygon: MKPolygon {}
 final class FencePolygon: MKPolygon {}
 final class FenceCircle: MKCircle {}
+final class MeasurePolyline: MKPolyline {}
+final class PreviewCircle: MKCircle {}
+
+/// ADS-B aircraft marker: an airplane glyph rotated to its heading plus a small text label.
+final class TrafficAnnotationView: MKAnnotationView {
+    private let icon = UIImageView()
+    private let label = UILabel()
+
+    override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        frame = CGRect(x: 0, y: 0, width: 28, height: 28)
+        canShowCallout = false
+        icon.frame = bounds
+        icon.contentMode = .scaleAspectFit
+        icon.tintColor = .systemOrange
+        icon.image = UIImage(systemName: "airplane")
+        addSubview(icon)
+        label.font = .systemFont(ofSize: 10, weight: .semibold)
+        label.textColor = .white
+        label.backgroundColor = UIColor.black.withAlphaComponent(0.6)
+        label.layer.cornerRadius = 3
+        label.layer.masksToBounds = true
+        label.textAlignment = .center
+        addSubview(label)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
+
+    /// "airplane" points east, so subtract 90 degrees to point north at heading 0.
+    func update(heading: Double, mapHeading: Double, text: String) {
+        icon.transform = CGAffineTransform(rotationAngle: CGFloat((heading - 90 - mapHeading) * .pi / 180))
+        label.text = " \(text) "
+        label.sizeToFit()
+        label.center = CGPoint(x: bounds.midX, y: bounds.maxY + label.bounds.height / 2 + 1)
+    }
+}
 
 struct MapCanvas: UIViewRepresentable {
     @ObservedObject var vehicle: VehicleModel
@@ -43,6 +79,12 @@ struct MapCanvas: UIViewRepresentable {
     var editTarget: MapEditTarget = .none
     var follow: Bool = false
     var showMission: Bool = true
+    /// Distance tool (Flight Data): first and second point; drawn as a dashed line.
+    var measureStart: GeoPoint?
+    var measureEnd: GeoPoint?
+    /// Orbit generator preview (Plan > Circle): centre marker and radius ring.
+    var previewCenter: GeoPoint?
+    var previewRadius: Double = 0
     var onTap: ((GeoPoint) -> Void)?
     var onMove: ((MapEditTarget, Int, GeoPoint) -> Void)?
     var onSelect: ((MapEditTarget, Int) -> Void)?
@@ -90,6 +132,49 @@ struct MapCanvas: UIViewRepresentable {
         private var drawnEditTarget: MapEditTarget?
         private var drawnShowMission: Bool?
         private var centeredOnce = false
+        private var trafficAnnotations: [UInt32: MapItemAnnotation] = [:]
+        private var extraAnnotations: [MapItemAnnotation] = []
+        private var extraOverlays: [MKOverlay] = []
+        private var drawnExtras: [Double]?
+
+        /// Red vehicle arrow, rendered once into a bitmap so no tint can turn it black.
+        static let vehicleImage: UIImage? = {
+            let cfg = UIImage.SymbolConfiguration(pointSize: 30, weight: .bold)
+                .applying(UIImage.SymbolConfiguration(paletteColors: [.systemRed]))
+            guard let sym = UIImage(systemName: "location.north.fill", withConfiguration: cfg) else { return nil }
+            let renderer = UIGraphicsImageRenderer(size: sym.size)
+            let img = renderer.image { _ in
+                sym.withTintColor(.systemRed, renderingMode: .alwaysOriginal).draw(in: CGRect(origin: .zero, size: sym.size))
+            }
+            return img.withRenderingMode(.alwaysOriginal)
+        }()
+
+        private static var markerCache: [String: UIImage] = [:]
+
+        /// Marker for the connected vehicle: the red arrow for flying vehicles / subs, an arrow in a circle for a ground rover
+        /// and an arrow with a base line for a boat; all point north in the bitmap, so the heading rotation applies. Pre-rendered, never tinted at draw time.
+        static func vehicleMarker(for vehicleType: UInt8) -> UIImage? {
+            let symbol: String
+            switch MAVType(rawValue: vehicleType) {
+            // Arrow-based symbols that already point north, so the heading is unambiguous (car/ferry
+            // symbols are side views; rotating them to a heading would be a guess).
+            case .some(.groundRover): symbol = "location.north.circle.fill"
+            case .some(.surfaceBoat): symbol = "location.north.line.fill"
+            default: return vehicleImage
+            }
+            if let cached = markerCache[symbol] { return cached }
+            let cfg = UIImage.SymbolConfiguration(pointSize: 30, weight: .bold)
+            guard let sym = UIImage(systemName: symbol, withConfiguration: cfg) else { return vehicleImage }
+            let side = max(sym.size.width, sym.size.height)
+            let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
+            let img = renderer.image { ctx in
+                let red = sym.withTintColor(.systemRed, renderingMode: .alwaysOriginal)
+                ctx.cgContext.translateBy(x: side / 2, y: side / 2)
+                red.draw(in: CGRect(x: -sym.size.width / 2, y: -sym.size.height / 2, width: sym.size.width, height: sym.size.height))
+            }.withRenderingMode(.alwaysOriginal)
+            markerCache[symbol] = img
+            return img
+        }
 
         init(_ parent: MapCanvas) { self.parent = parent }
 
@@ -99,6 +184,8 @@ struct MapCanvas: UIViewRepresentable {
             applyTiles(map)
             syncVehicle(map)
             syncTrail(map)
+            syncTraffic(map)
+            syncExtras(map)
             if parent.mission.version != drawnVersion || parent.editTarget != drawnEditTarget
                 || parent.showMission != drawnShowMission {
                 drawPlan(map)
@@ -129,6 +216,8 @@ struct MapCanvas: UIViewRepresentable {
                 vehicleAnnotation.heading = v.yaw
                 if !map.annotations.contains(where: { $0 === vehicleAnnotation }) { map.addAnnotation(vehicleAnnotation) }
                 if let view = map.view(for: vehicleAnnotation) {
+                    let marker = Coordinator.vehicleMarker(for: v.vehicleType)
+                    if view.image !== marker { view.image = marker }
                     view.transform = CGAffineTransform(rotationAngle: CGFloat((v.yaw - map.camera.heading) * .pi / 180))
                 }
                 if !centeredOnce {
@@ -157,6 +246,78 @@ struct MapCanvas: UIViewRepresentable {
             let line = TrailPolyline(coordinates: coords, count: coords.count)
             map.addOverlay(line, level: .aboveLabels)
             trailOverlay = line
+        }
+
+        // MARK: ADS-B traffic
+
+        private func trafficText(_ t: VehicleModel.Traffic) -> String {
+            var s = "\(t.callsign) \(Int(t.altitude.rounded())) m"
+            if let me = parent.vehicle.position {
+                let d = Geo.distance(me, t.position)
+                s += d >= 1000 ? String(format: " · %.1f km", d / 1000) : String(format: " · %.0f m", d)
+            }
+            return s
+        }
+
+        private func syncTraffic(_ map: MKMapView) {
+            let traffic = parent.vehicle.traffic
+            for (icao, a) in trafficAnnotations where traffic[icao] == nil {
+                map.removeAnnotation(a)
+                trafficAnnotations[icao] = nil
+            }
+            for (icao, t) in traffic {
+                let c = CLLocationCoordinate2D(latitude: t.position.latitude, longitude: t.position.longitude)
+                let text = trafficText(t)
+                let a: MapItemAnnotation
+                if let existing = trafficAnnotations[icao] {
+                    a = existing
+                    if a.coordinate.latitude != c.latitude || a.coordinate.longitude != c.longitude { a.coordinate = c }
+                } else {
+                    a = MapItemAnnotation(kind: .traffic, index: Int(icao), coordinate: c, label: text)
+                    trafficAnnotations[icao] = a
+                    map.addAnnotation(a)
+                }
+                a.label = text
+                a.heading = t.heading
+                if let view = map.view(for: a) as? TrafficAnnotationView {
+                    view.update(heading: t.heading, mapHeading: map.camera.heading, text: text)
+                }
+            }
+        }
+
+        // MARK: measure line + orbit preview
+
+        private func syncExtras(_ map: MKMapView) {
+            let key: [Double] = [parent.measureStart?.latitude ?? .nan, parent.measureStart?.longitude ?? .nan,
+                                 parent.measureEnd?.latitude ?? .nan, parent.measureEnd?.longitude ?? .nan,
+                                 parent.previewCenter?.latitude ?? .nan, parent.previewCenter?.longitude ?? .nan,
+                                 parent.previewRadius]
+            // NaN != NaN, so compare through the bit patterns
+            if let d = drawnExtras, d.map({ $0.bitPattern }) == key.map({ $0.bitPattern }) { return }
+            drawnExtras = key
+            map.removeAnnotations(extraAnnotations)
+            map.removeOverlays(extraOverlays)
+            extraAnnotations = []
+            extraOverlays = []
+            func coord(_ p: GeoPoint) -> CLLocationCoordinate2D {
+                CLLocationCoordinate2D(latitude: p.latitude, longitude: p.longitude)
+            }
+            if let a = parent.measureStart {
+                extraAnnotations.append(MapItemAnnotation(kind: .measure, index: 0, coordinate: coord(a), label: "A"))
+                if let b = parent.measureEnd {
+                    extraAnnotations.append(MapItemAnnotation(kind: .measure, index: 1, coordinate: coord(b), label: "B"))
+                    let pts = [coord(a), coord(b)]
+                    extraOverlays.append(MeasurePolyline(coordinates: pts, count: 2))
+                }
+            }
+            if let c = parent.previewCenter {
+                extraAnnotations.append(MapItemAnnotation(kind: .measure, index: 2, coordinate: coord(c), label: "C"))
+                if parent.previewRadius > 0 {
+                    extraOverlays.append(PreviewCircle(center: coord(c), radius: CLLocationDistance(parent.previewRadius)))
+                }
+            }
+            map.addOverlays(extraOverlays, level: .aboveLabels)
+            map.addAnnotations(extraAnnotations)
         }
 
         private func drawPlan(_ map: MKMapView) {
@@ -272,15 +433,21 @@ struct MapCanvas: UIViewRepresentable {
                 let id = "vehicle"
                 let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) ?? MKAnnotationView(annotation: a, reuseIdentifier: id)
                 v.annotation = a
-                let cfg = UIImage.SymbolConfiguration(pointSize: 30, weight: .bold)
-                v.image = UIImage(systemName: "location.north.fill", withConfiguration: cfg)?
-                    .withTintColor(.systemRed, renderingMode: .alwaysOriginal)
+                v.image = Coordinator.vehicleMarker(for: parent.vehicle.vehicleType)
                 v.layer.shadowColor = UIColor.black.cgColor
                 v.layer.shadowOpacity = 0.8
                 v.layer.shadowRadius = 2
                 v.layer.shadowOffset = .zero
                 v.displayPriority = .required
                 v.zPriority = .max
+                return v
+            case .traffic:
+                let id = "traffic"
+                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id) as? TrafficAnnotationView)
+                    ?? TrafficAnnotationView(annotation: a, reuseIdentifier: id)
+                v.annotation = a
+                v.displayPriority = .required
+                v.update(heading: a.heading, mapHeading: mapView.camera.heading, text: a.label)
                 return v
             default:
                 let id = "item"
@@ -297,7 +464,8 @@ struct MapCanvas: UIViewRepresentable {
                 case .fence: v.markerTintColor = .systemRed
                 case .rally: v.markerTintColor = .systemOrange
                 case .survey: v.markerTintColor = .systemPurple
-                case .vehicle: break
+                case .measure: v.markerTintColor = .systemTeal
+                case .vehicle, .traffic: break
                 }
                 let editable = target(for: a.kind).map { $0 == parent.editTarget } ?? false
                 v.isDraggable = editable
@@ -352,6 +520,21 @@ struct MapCanvas: UIViewRepresentable {
                 r.strokeColor = .systemPurple
                 r.fillColor = UIColor.systemPurple.withAlphaComponent(0.15)
                 r.lineWidth = 2
+                return r
+            }
+            if let l = overlay as? MeasurePolyline {
+                let r = MKPolylineRenderer(polyline: l)
+                r.strokeColor = .systemTeal
+                r.lineWidth = 3
+                r.lineDashPattern = [8, 6]
+                return r
+            }
+            if let c = overlay as? PreviewCircle {
+                let r = MKCircleRenderer(circle: c)
+                r.strokeColor = .systemTeal
+                r.fillColor = UIColor.systemTeal.withAlphaComponent(0.10)
+                r.lineWidth = 2
+                r.lineDashPattern = [6, 4]
                 return r
             }
             return MKOverlayRenderer(overlay: overlay)

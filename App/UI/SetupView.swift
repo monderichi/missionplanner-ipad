@@ -9,6 +9,8 @@ import SwiftUI
 enum SetupPage: String, CaseIterable, Identifiable {
     case prearm = "Pre-arm & sensors"
     case frame = "Frame type"
+    case roversetup = "Rover setup"
+    case subsetup = "ROV setup"
     case fence = "Geofence & max altitude"
     case battery = "Battery monitor"
     case failsafe = "Failsafe"
@@ -19,36 +21,119 @@ enum SetupPage: String, CaseIterable, Identifiable {
     case radio = "Radio calibration"
     case modes = "Flight modes"
     case motors = "Motor test"
+    case servo = "Servo output"
+    case othercal = "Other calibrations"
+    case rangefinder = "Rangefinder"
+    case airspeed = "Airspeed sensor"
+    case flow = "Optical flow"
+    case gps = "GPS"
+    case compasscfg = "Compass config"
+    case serial = "Serial ports"
+    case planner = "Planner settings"
 
     var id: String { rawValue }
 
-    /// REA Parity Source: MissionPlanner ConfigFailSafe.cs / ConfigBatteryMonitoring.cs.
-    static let failsafeParams = [
-        "FS_THR_ENABLE", "FS_THR_VALUE", "BATT_FS_LOW_ACT", "BATT_LOW_VOLT", "BATT_LOW_MAH",
-        "BATT_FS_CRT_ACT", "BATT_CRT_VOLT", "BATT_CRT_MAH", "FS_GCS_ENABLE", "FS_GCS_TIMEOUT",
-        "FS_EKF_ACTION", "FS_EKF_THRESH", "FS_CRASH_CHECK", "FS_OPTIONS",
-        // Plane / Rover equivalents (only shown if the vehicle has them)
-        "THR_FAILSAFE", "THR_FS_VALUE", "FS_SHORT_ACTN", "FS_LONG_ACTN", "FS_LONG_TIMEOUT", "FS_ACTION", "FS_TIMEOUT",
-    ]
+    /// Which firmware the page makes sense for. `nil` / `.other` (no vehicle yet, or an unknown type) shows
+    /// every generic page, which then asks for a connection.
+    func applies(to fw: MAVType.Firmware?) -> Bool {
+        let f = fw ?? .other
+        switch self {
+        case .roversetup: return f == .rover
+        case .subsetup: return f == .sub
+        case .frame: return f == .copter || f == .other
+        case .fence, .failsafe, .tuning: return f == .copter || f == .plane || f == .rover || f == .other
+        case .modes: return f == .copter || f == .plane || f == .rover || f == .other
+        case .motors: return f == .copter || f == .rover || f == .sub || f == .other
+        case .rangefinder: return f != .tracker
+        case .airspeed: return f == .plane || f == .other
+        case .flow: return f == .copter || f == .plane || f == .rover || f == .other
+        default: return true // prearm, battery, logs, accel, compass, radio, servo, othercal, gps, compasscfg, serial, planner
+        }
+    }
 
-    /// REA Parity Source: MissionPlanner ConfigArducopter.cs (Extended Tuning) / ConfigArduplane.cs.
-    static let tuningParams = [
-        "ATC_RAT_RLL_P", "ATC_RAT_RLL_I", "ATC_RAT_RLL_D", "ATC_RAT_PIT_P", "ATC_RAT_PIT_I", "ATC_RAT_PIT_D",
-        "ATC_RAT_YAW_P", "ATC_RAT_YAW_I", "ATC_RAT_YAW_D", "ATC_ANG_RLL_P", "ATC_ANG_PIT_P", "ATC_ANG_YAW_P",
-        "ATC_INPUT_TC", "ATC_ACCEL_R_MAX", "ATC_ACCEL_P_MAX", "ATC_ACCEL_Y_MAX",
-        "INS_GYRO_FILTER", "INS_ACCEL_FILTER", "MOT_THST_HOVER", "MOT_THST_EXPO", "MOT_SPIN_ARM", "MOT_SPIN_MIN",
-        "PSC_ACCZ_P", "PSC_ACCZ_I", "PSC_VELXY_P", "PSC_POSXY_P", "ANGLE_MAX", "PILOT_SPEED_UP", "PILOT_SPEED_DN",
-        "WPNAV_SPEED", "WPNAV_SPEED_UP", "WPNAV_SPEED_DN", "WPNAV_RADIUS", "LOIT_SPEED", "RTL_ALT", "RTL_SPEED",
-        "LAND_SPEED", "AUTOTUNE_AXES", "AUTOTUNE_AGGR",
-        // Plane
-        "RLL_RATE_P", "RLL_RATE_I", "RLL_RATE_D", "PTCH_RATE_P", "PTCH_RATE_I", "PTCH_RATE_D",
-        "AIRSPEED_CRUISE", "TRIM_THROTTLE", "TECS_CLMB_MAX", "TECS_SINK_MAX", "NAVL1_PERIOD",
+    /// REA Parity Source: MissionPlanner ConfigFailSafe.cs / ConfigBatteryMonitoring.cs.
+    /// Names the vehicle doesn't have are skipped by ParamAutoRow, so a few renamed aliases are listed.
+    static func failsafeParams(for fw: MAVType.Firmware?) -> [String] {
+        switch fw {
+        case .plane:
+            return [
+                "THR_FAILSAFE", "THR_FS_VALUE", "FS_SHORT_ACTN", "FS_SHORT_TIMEOUT", "FS_LONG_ACTN", "FS_LONG_TIMEOUT",
+                "FS_GCS_ENABL", "BATT_FS_LOW_ACT", "BATT_LOW_VOLT", "BATT_LOW_MAH", "BATT_FS_CRT_ACT", "BATT_CRT_VOLT",
+                "BATT_CRT_MAH", "FS_EKF_THRESH",
+            ]
+        case .rover:
+            return [
+                "FS_ACTION", "FS_TIMEOUT", "FS_THR_ENABLE", "FS_THR_VALUE", "FS_GCS_ENABLE", "FS_CRASH_CHECK",
+                "FS_EKF_ACTION", "FS_EKF_THRESH", "FS_OPTIONS", "BATT_FS_LOW_ACT", "BATT_LOW_VOLT", "BATT_LOW_MAH",
+                "BATT_FS_CRT_ACT", "BATT_CRT_VOLT", "BATT_CRT_MAH",
+            ]
+        default: // Copter
+            return [
+                "FS_THR_ENABLE", "FS_THR_VALUE", "BATT_FS_LOW_ACT", "BATT_LOW_VOLT", "BATT_LOW_MAH",
+                "BATT_FS_CRT_ACT", "BATT_CRT_VOLT", "BATT_CRT_MAH", "FS_GCS_ENABLE", "FS_GCS_TIMEOUT",
+                "FS_EKF_ACTION", "FS_EKF_THRESH", "FS_CRASH_CHECK", "FS_VIBE_ENABLE", "FS_DR_ENABLE", "FS_OPTIONS",
+            ]
+        }
+    }
+
+    /// REA Parity Source: MissionPlanner ConfigArducopter.cs (Extended Tuning) / ConfigArduplane.cs / ConfigArdurover.cs.
+    static func tuningParams(for fw: MAVType.Firmware?) -> [String] {
+        switch fw {
+        case .plane:
+            return [
+                "RLL_RATE_P", "RLL_RATE_I", "RLL_RATE_D", "PTCH_RATE_P", "PTCH_RATE_I", "PTCH_RATE_D",
+                "RLL2SRV_TCONST", "PTCH2SRV_TCONST", "AIRSPEED_CRUISE", "TRIM_ARSPD_CM", "ARSPD_FBW_MIN", "ARSPD_FBW_MAX",
+                "TRIM_THROTTLE", "THR_MIN", "THR_MAX", "LIM_ROLL_CD", "LIM_PITCH_MAX", "TECS_CLMB_MAX", "TECS_SINK_MAX",
+                "TECS_SPDWEIGHT", "TECS_TIME_CONST", "NAVL1_PERIOD",
+            ]
+        case .rover:
+            return [
+                "ATC_STR_RAT_P", "ATC_STR_RAT_I", "ATC_STR_RAT_D", "ATC_STR_RAT_FF", "ATC_STR_RAT_MAX", "ATC_STR_ANG_P",
+                "ATC_SPEED_P", "ATC_SPEED_I", "ATC_SPEED_D", "ATC_ACCEL_MAX", "ATC_DECEL_MAX", "ATC_STR_ACC_MAX",
+                "ATC_TURN_MAX_G", "CRUISE_SPEED", "CRUISE_THROTTLE", "WP_SPEED", "WP_RADIUS", "WP_OVERSHOOT",
+                "TURN_RADIUS", "TURN_MAX_G", "NAVL1_PERIOD", "MOT_THR_MIN", "MOT_THR_MAX", "MOT_SLEWRATE",
+                "PILOT_STEER_TYPE",
+            ]
+        default: // Copter. PSC_NE_* / PSC_D_* are the 4.7+ names of PSC_VELXY/POSXY/ACCZ.
+            return [
+                "ATC_RAT_RLL_P", "ATC_RAT_RLL_I", "ATC_RAT_RLL_D", "ATC_RAT_PIT_P", "ATC_RAT_PIT_I", "ATC_RAT_PIT_D",
+                "ATC_RAT_YAW_P", "ATC_RAT_YAW_I", "ATC_RAT_YAW_D", "ATC_ANG_RLL_P", "ATC_ANG_PIT_P", "ATC_ANG_YAW_P",
+                "ATC_INPUT_TC", "ATC_ACCEL_R_MAX", "ATC_ACCEL_P_MAX", "ATC_ACCEL_Y_MAX",
+                "INS_GYRO_FILTER", "INS_ACCEL_FILTER", "MOT_THST_HOVER", "MOT_THST_EXPO", "MOT_SPIN_ARM", "MOT_SPIN_MIN",
+                "PSC_ACCZ_P", "PSC_ACCZ_I", "PSC_D_ACC_P", "PSC_D_ACC_I", "PSC_VELXY_P", "PSC_NE_VEL_P",
+                "PSC_POSXY_P", "PSC_NE_POS_P", "ANGLE_MAX", "PILOT_SPEED_UP", "PILOT_SPEED_DN",
+                "WPNAV_SPEED", "WPNAV_SPEED_UP", "WPNAV_SPEED_DN", "WPNAV_RADIUS", "LOIT_SPEED", "RTL_ALT", "RTL_SPEED",
+                "LAND_SPEED", "AUTOTUNE_AXES", "AUTOTUNE_AGGR",
+            ]
+        }
+    }
+
+    /// REA Parity Source: MissionPlanner ConfigRangeFinder.cs / ConfigOpticalFlow.cs / ConfigHWAirspeed.cs / ConfigHWCompass.cs.
+    static let rangefinderParams = [
+        "RNGFND1_TYPE", "RNGFND1_ORIENT", "RNGFND1_MIN_CM", "RNGFND1_MIN", "RNGFND1_MAX_CM", "RNGFND1_MAX",
+        "RNGFND1_GNDCLEAR", "RNGFND1_SCALING", "RNGFND1_OFFSET", "RNGFND1_PIN",
     ]
+    static let airspeedParams = ["ARSPD_TYPE", "ARSPD_USE", "ARSPD_PIN", "ARSPD_RATIO", "ARSPD_OFFSET", "ARSPD_AUTOCAL", "ARSPD_BUS"]
+    static let flowParams = ["FLOW_TYPE", "FLOW_ORIENT_YAW", "FLOW_FXSCALER", "FLOW_FYSCALER", "FLOW_POS_X", "FLOW_POS_Y", "FLOW_POS_Z"]
+    static let gpsParams = [
+        "GPS_TYPE", "GPS1_TYPE", "GPS_TYPE2", "GPS2_TYPE", "GPS_AUTO_CONFIG", "GPS_GNSS_MODE", "GPS1_GNSS_MODE",
+        "GPS_GNSS_MODE2", "GPS2_GNSS_MODE", "GPS_RATE_MS", "GPS_RATE_MS2", "GPS_AUTO_SWITCH", "GPS_PRIMARY",
+    ]
+    static let compassParams = [
+        "COMPASS_ENABLE", "COMPASS_USE", "COMPASS_USE2", "COMPASS_USE3", "COMPASS_ORIENT", "COMPASS_ORIENT2",
+        "COMPASS_EXTERNAL", "COMPASS_AUTODEC", "COMPASS_DEC", "COMPASS_LEARN",
+    ]
+    static let serialParams: [String] = (0...8).flatMap { ["SERIAL\($0)_PROTOCOL", "SERIAL\($0)_BAUD"] }
+
+    /// The Planner settings page is local to this iPad and works without a vehicle.
+    var needsVehicle: Bool { self != .planner }
 
     var icon: String {
         switch self {
         case .prearm: return "checklist"
         case .frame: return "airplane"
+        case .roversetup: return "car.fill"
+        case .subsetup: return "water.waves"
         case .fence: return "arrow.up.to.line"
         case .battery: return "battery.75"
         case .failsafe: return "exclamationmark.shield"
@@ -59,6 +144,15 @@ enum SetupPage: String, CaseIterable, Identifiable {
         case .radio: return "dot.radiowaves.left.and.right"
         case .modes: return "switch.2"
         case .motors: return "fanblades"
+        case .servo: return "slider.vertical.3"
+        case .othercal: return "scope"
+        case .rangefinder: return "ruler"
+        case .airspeed: return "wind"
+        case .flow: return "camera.metering.center.weighted"
+        case .gps: return "location.fill"
+        case .compasscfg: return "safari"
+        case .serial: return "cable.connector"
+        case .planner: return "gearshape"
         }
     }
 }
@@ -66,14 +160,19 @@ enum SetupPage: String, CaseIterable, Identifiable {
 struct SetupView: View {
     @EnvironmentObject var vehicle: VehicleModel
     @EnvironmentObject var commands: CommandCenter
-    @State private var page = SetupPage.prearm
+    @State private var selected = SetupPage.allCases.first { "\($0)" == UserDefaults.standard.string(forKey: "MPSetupPage") } ?? .prearm
+
+    private var firmware: MAVType.Firmware? { MAVType(rawValue: vehicle.vehicleType)?.firmware }
+    private var visiblePages: [SetupPage] { SetupPage.allCases.filter { $0.applies(to: firmware) } }
+    /// The remembered page may not exist for this firmware (e.g. after switching vehicles): fall back to the first one.
+    private var page: SetupPage { visiblePages.contains(selected) ? selected : (visiblePages.first ?? .prearm) }
 
     var body: some View {
         HStack(spacing: 0) {
             List {
-                ForEach(SetupPage.allCases) { p in
+                ForEach(visiblePages) { p in
                     Button {
-                        page = p
+                        selected = p
                     } label: {
                         Label(p.rawValue, systemImage: p.icon).fontWeight(page == p ? .bold : .regular)
                     }
@@ -92,25 +191,42 @@ struct SetupView: View {
                         .padding(.horizontal, 12).padding(.vertical, 6)
                         .background(Color.accentColor.opacity(0.10))
                 }
-                if !commands.isAttached {
+                if page.needsVehicle && !commands.isAttached {
                     Text("Connect to a vehicle to use Setup.").foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     switch page {
                     case .prearm: PrearmPage()
                     case .frame: FramePage()
+                    case .roversetup: RoverSetupPage()
+                    case .subsetup: SubSetupPage()
                     case .fence: FencePage()
                     case .battery: BatteryPage()
-                    case .failsafe: ParamListPage(title: "Failsafe", names: SetupPage.failsafeParams,
+                    case .failsafe: ParamListPage(title: "Failsafe", names: SetupPage.failsafeParams(for: firmware),
                                                   footer: "FS_GCS_ENABLE reacts to losing this iPad's heartbeat; over ExpressLRS short dropouts are normal, so use a timeout (FS_GCS_TIMEOUT) of several seconds.")
-                    case .tuning: ParamListPage(title: "Tuning", names: SetupPage.tuningParams,
-                                                footer: "Change one value at a time in small steps and test-fly. Parameters › Save first to keep a backup.")
+                    case .tuning: ParamListPage(title: "Tuning", names: SetupPage.tuningParams(for: firmware),
+                                                footer: "Change one value at a time in small steps and test-drive or test-fly. Parameters › Save first to keep a backup.")
                     case .logs: LogsPage()
                     case .accel: AccelPage()
                     case .compass: CompassPage()
                     case .radio: RadioPage()
                     case .modes: FlightModesPage()
                     case .motors: MotorTestPage()
+                    case .servo: ServoPage()
+                    case .othercal: OtherCalPage()
+                    case .rangefinder: ParamListPage(title: "Rangefinder", names: SetupPage.rangefinderParams,
+                                                     footer: "Only parameters the firmware has are shown. Reboot after changing the sensor type.")
+                    case .airspeed: ParamListPage(title: "Airspeed", names: SetupPage.airspeedParams,
+                                                  footer: "Airspeed parameters exist only on firmware with an airspeed library (Plane, VTOL, and Copter builds that include it). Reboot after changing the sensor type.")
+                    case .flow: ParamListPage(title: "Optical flow", names: SetupPage.flowParams,
+                                              footer: "Reboot after enabling the sensor. Position offsets are relative to the flight controller, in metres.")
+                    case .gps: ParamListPage(title: "GPS", names: SetupPage.gpsParams,
+                                             footer: "Reboot after changing the GPS type. Newer firmware names these GPS1_TYPE / GPS1_GNSS_MODE; only the ones this vehicle has are shown.")
+                    case .compasscfg: ParamListPage(title: "Compass config", names: SetupPage.compassParams,
+                                                    footer: "Calibrate on the Compass page. Reboot after changing which compasses are used or their orientation.")
+                    case .serial: ParamListPage(title: "Serial ports", names: SetupPage.serialParams,
+                                                footer: "Take care: changing the protocol of the port this link uses (for example SERIAL6 for ExpressLRS) can cut your connection. A reboot is needed.")
+                    case .planner: PlannerSettingsPage()
                     }
                 }
             }
@@ -207,7 +323,7 @@ struct ParamOptionRow: View {
                     ForEach(meta?.values ?? []) { o in Text("\(Int(o.code)): \(o.label)").tag(o.code) }
                     if meta?.label(for: p.value) == nil { Text("\(ParamFile.formatValue(p.value))").tag(Double(p.value)) }
                 }
-                .pickerStyle(.navigationLink)
+                .pickerStyle(.menu)
                 if params.pendingNames.contains(name) { ProgressView() }
             }
         }
@@ -310,6 +426,7 @@ struct CompassPage: View {
                     }
                 }
             }
+            FixedYawCalSection()
             Section {
                 EmptyView()
             } footer: {
@@ -330,6 +447,10 @@ struct RadioPage: View {
     @State private var message: String?
 
     private var channels: Int { max(8, min(16, vehicle.rcChannelCount)) }
+    private var centredThrottle: Bool {
+        let fw = MAVType(rawValue: vehicle.vehicleType)?.firmware
+        return fw == .rover || fw == .sub
+    }
 
     var body: some View {
         Form {
@@ -387,7 +508,8 @@ struct RadioPage: View {
         for i in 0..<channels where maxs[i] > mins[i] && maxs[i] - mins[i] > 300 {
             let ch = i + 1
             let cur = vehicle.rcChannels[i]
-            let trim = ch == throttleCh ? mins[i] : min(max(cur, mins[i]), maxs[i])
+            // Copter/plane throttle rests at its minimum; rover/sub throttle is centre-sprung like the other sticks.
+            let trim = (ch == throttleCh && !centredThrottle) ? mins[i] : min(max(cur, mins[i]), maxs[i])
             out["RC\(ch)_MIN"] = Float(mins[i])
             out["RC\(ch)_MAX"] = Float(maxs[i])
             out["RC\(ch)_TRIM"] = Float(trim)
@@ -477,31 +599,69 @@ struct MotorTestPage: View {
     @State private var duration = 2.0
     @State private var propsOff = false
 
-    private var motorCount: Int {
+    private var firmware: MAVType.Firmware? { MAVType(rawValue: vehicle.vehicleType)?.firmware }
+    private var isRover: Bool { firmware == .rover }
+    private var isSub: Bool { firmware == .sub }
+
+    /// REA Parity Source: ArduCopter AP_MotorsMatrix frame classes (FRAME_CLASS -> motor count).
+    private var copterMotorCount: Int {
         switch Int(params.params["FRAME_CLASS"]?.value ?? 1) {
-        case 2, 5: return 6
-        case 3, 4: return 8
-        case 7: return 3
-        case 10: return 2
-        case 12: return 12
-        case 14: return 10
-        default: return 4
+        case 2, 5: return 6      // hexa, Y6
+        case 3, 4: return 8      // octa, octa-quad
+        case 7: return 3         // tri
+        case 9, 10: return 2     // coax, bicopter
+        case 12: return 12       // dodeca-hexa
+        case 14: return 10       // deca
+        default: return 4        // quad, heli-quad (13)
         }
     }
+
+    /// ArduSub FRAME_CONFIG -> thruster count.
+    private var subMotorCount: Int {
+        switch Int(params.params["FRAME_CONFIG"]?.value ?? 1) {
+        case 4: return 3
+        case 5: return 4
+        case 6: return 5
+        case 0, 1: return 6
+        default: return 8
+        }
+    }
+
+    private func outputHas(function: Float) -> Bool {
+        (1...16).contains { params.params["SERVO\($0)_FUNCTION"]?.value == function }
+    }
+
+    /// Rover skid steering: throttle left (73) / right (74) outputs exist.
+    private var skidSteer: Bool { outputHas(function: 73) || outputHas(function: 74) }
+
+    /// Button label per ArduPilot motor-test sequence number.
+    private var targets: [(seq: Int, label: String)] {
+        if isRover {
+            // AP_MotorsUGV::output_test_seq: 1 = throttle (left), 2 = steering (right).
+            return skidSteer ? [(1, "Left"), (2, "Right")] : [(1, "Throttle"), (2, "Steering")]
+        }
+        if isSub { return (1...subMotorCount).map { (seq: $0, label: "M\($0)") } }
+        return (1...copterMotorCount).map { (seq: $0, label: CalibrationStore.motorLetter($0)) }
+    }
+
+    private var throttleRange: ClosedRange<Double> { isRover ? -100...100 : 1...30 }
+    private var throttleStep: Double { isRover ? 5 : 1 }
 
     var body: some View {
         Form {
             Section {
-                Toggle("I have REMOVED THE PROPELLERS", isOn: $propsOff)
+                Toggle(isRover ? "I have LIFTED THE WHEELS OFF THE GROUND" : "I have REMOVED THE PROPELLERS", isOn: $propsOff)
                     .tint(.red)
             } footer: {
-                Text("Motors spin during this test. Never test with propellers fitted.")
+                Text(isRover
+                     ? "The wheels or propeller spin during this test. Keep the vehicle clear of people and obstacles."
+                     : "Motors spin during this test. Never test with propellers fitted.")
             }
             Section("Settings") {
                 HStack {
                     Text("Throttle")
-                    Slider(value: $throttle, in: 1...30, step: 1)
-                    Text("\(Int(throttle)) %").monospacedDigit().frame(width: 50)
+                    Slider(value: $throttle, in: throttleRange, step: throttleStep)
+                    Text("\(Int(throttle)) %").monospacedDigit().frame(width: 60)
                 }
                 HStack {
                     Text("Duration")
@@ -509,23 +669,29 @@ struct MotorTestPage: View {
                     Text(String(format: "%.1f s", duration)).monospacedDigit().frame(width: 50)
                 }
             }
-            Section("Motors (test order A, B, C… as in the ArduPilot frame diagrams)") {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 70))], spacing: 12) {
-                    ForEach(1...motorCount, id: \.self) { m in
-                        Button(CalibrationStore.motorLetter(m)) {
-                            calibration.motorTest(motor: m, throttle: Float(throttle), duration: Float(duration))
+            Section(isRover
+                    ? "Outputs (negative throttle = reverse / steer left)"
+                    : (isSub ? "Thrusters (test order by motor number)" : "Motors (test order A, B, C… as in the ArduPilot frame diagrams)")) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: isRover ? 110 : 70))], spacing: 12) {
+                    ForEach(targets.indices, id: \.self) { i in
+                        let t = targets[i]
+                        Button(t.label) {
+                            calibration.motorTest(motor: t.seq, throttle: Float(throttle), duration: Float(duration))
                         }
                         .buttonStyle(.borderedProminent)
                         .font(.title3.bold())
                     }
                 }
                 .padding(.vertical, 6)
-                Button("Test all motors in sequence") {
-                    calibration.motorTest(motor: 1, throttle: Float(throttle), duration: Float(duration), count: motorCount)
+                if !isRover {
+                    Button("Test all motors in sequence") {
+                        calibration.motorTest(motor: 1, throttle: Float(throttle), duration: Float(duration), count: targets.count)
+                    }
                 }
             }
             .disabled(!propsOff || vehicle.armed)
         }
+        .onAppear { if isRover { throttle = 10 } }
     }
 }
 
@@ -537,15 +703,23 @@ struct FencePage: View {
     @EnvironmentObject var params: ParameterStore
     @State private var quickAlt = 120.0
 
-    private var available: Bool { params.params["FENCE_ALT_MAX"] != nil }
+    @EnvironmentObject var vehicle: VehicleModel
+
+    private var firmware: MAVType.Firmware? { MAVType(rawValue: vehicle.vehicleType)?.firmware }
+    /// The quick maximum-altitude preset only makes sense when the vehicle flies.
+    private var hasAltitudePreset: Bool {
+        (firmware == .copter || firmware == .plane) && params.params["FENCE_ALT_MAX"] != nil
+    }
+    private var available: Bool { params.params["FENCE_ENABLE"] != nil || params.params["FENCE_ALT_MAX"] != nil }
 
     var body: some View {
         Form {
             if params.params.isEmpty {
                 Text("Waiting for parameters…").foregroundColor(.secondary)
             } else if !available {
-                Text("This firmware has no FENCE_ALT_MAX parameter.").foregroundColor(.secondary)
+                Text("This firmware has no geofence parameters.").foregroundColor(.secondary)
             } else {
+                if hasAltitudePreset {
                 Section {
                     HStack {
                         Text("Maximum altitude")
@@ -568,9 +742,10 @@ struct FencePage: View {
                 } footer: {
                     Text("Writes FENCE_ALT_MAX, turns on the altitude fence (FENCE_TYPE bit 0), sets FENCE_ENABLE = 1 and, if it was \"Report only\", FENCE_ACTION = RTL or Land. If the vehicle climbs above this height it returns or lands. Keep the circle/polygon fences as they are, or adjust them below.")
                 }
+                }
                 ParamOptionRow(name: "FENCE_ENABLE")
                 ParamBitmaskRow(name: "FENCE_TYPE")
-                ParamNumberRow(name: "FENCE_ALT_MAX")
+                if firmware != .rover { ParamNumberRow(name: "FENCE_ALT_MAX") }
                 ParamOptionRow(name: "FENCE_ACTION")
                 ParamNumberRow(name: "FENCE_RADIUS")
                 ParamNumberRow(name: "FENCE_MARGIN")
@@ -578,7 +753,9 @@ struct FencePage: View {
                 Section {
                     EmptyView()
                 } footer: {
-                    Text("The circle and polygon fences need a GPS fix to arm. The altitude fence is measured from home (where the vehicle armed). Test the limit at a safe height first.")
+                    Text(firmware == .rover
+                         ? "The circle and polygon fences need a GPS fix to arm. Draw the polygon in Plan › Fence. Test the fence at low speed first."
+                         : "The circle and polygon fences need a GPS fix to arm. The altitude fence is measured from home (where the vehicle armed). Test the limit at a safe height first.")
                 }
             }
         }
@@ -770,11 +947,13 @@ struct LogsPage: View {
     @EnvironmentObject var logs: LogStore
     @EnvironmentObject var vehicle: VehicleModel
     @State private var confirmErase = false
+    @State private var showReview = false
 
     var body: some View {
         Form {
             Section {
                 HStack {
+                    Button { showReview = true } label: { Label("Review a downloaded log…", systemImage: "chart.xyaxis.line") }
                     Button { logs.refresh() } label: { Label("List logs on the vehicle", systemImage: "arrow.clockwise") }
                         .disabled(logs.listing || logs.downloading != nil)
                     if logs.listing { ProgressView() }
@@ -811,6 +990,13 @@ struct LogsPage: View {
             Section {
                 Button("Erase all logs on the vehicle", role: .destructive) { confirmErase = true }
                     .disabled(logs.entries.isEmpty || vehicle.armed)
+            }
+        }
+        .sheet(isPresented: $showReview) { LogReviewPicker() }
+        .onAppear {
+            // Test automation only: -MPOpenLogReview YES opens the log review sheet.
+            if UserDefaults.standard.bool(forKey: "MPOpenLogReview") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { showReview = true }
             }
         }
         .alert("Erase all logs?", isPresented: $confirmErase) {
