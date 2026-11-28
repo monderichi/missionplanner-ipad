@@ -45,7 +45,7 @@ The user's original request is kept verbatim at the end; the version below is th
   full suite at the end. Each fix: code + comment + regression test (unit test, harness scenario or UI test) +
   `testing/FIX_LOG.md` entry + `TESTING_RESULTS.md` status → FIXED. Keep CI green (GitHub Actions builds on push to main;
   check the PR's checks). Commit per bug or small group; push regularly.
-- [ ] **7. Open a PR** `bug_fixes` → `main` with a full description (what changed, how it was tested, what remains).
+- [x] **7. Open a PR** `bug_fixes` → `main` with a full description (what changed, how it was tested, what remains).
 - [ ] **8. Independent review**: a fresh agent (no access to this conversation) reviews the PR diff for correctness,
   safety and regressions and writes `testing/REVIEW_<n>.md`.
 - [ ] **9. Apply** the reviewer's required changes (if any), with tests, and push.
@@ -104,3 +104,6 @@ The user's original request is kept verbatim at the end; the version below is th
 - 03:24–04:05 Step 6: MAVLinkKit fixes (b8463ee), app fixes (ff486da), BUG-034 metadata (8a65346), CI/a11y (03db204),
   version 0.5.0 + legacy metadata names + section 9. Verified: unit 55/55, fake drone 86/86, SITL 21/21, TSan 0 races,
   Catalyst UI crash tests pass. Remaining UI fails are test limitations (ADS-B labels / ESC list scroll not visible to XCUI).
+- 04:10 Step 7 done: PR https://github.com/monderichi/missionplanner-ipad/pull/1 (bug_fixes → main), bound in the app.
+  Step 8 started: independent general-purpose agent reviewing; it writes testing/REVIEW_1.md (no code edits).
+  BUG-037 re-measured: 48 % → 34 % CPU at 50 Hz (PARTIAL).
