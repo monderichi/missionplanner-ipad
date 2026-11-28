@@ -117,34 +117,7 @@ enum Probes {
             c.check("ports 0/0 from backpack fall back to the typed ports", used == 14555, "would use \(used)")
         }
         // New DataFlash (.bin) parser from origin/main: mutate the real fixture and feed random data.
-        d["probe:dataflash_fuzz"] = { (c: Ctx) in
-            signal(SIGTRAP, fuzzTrapHandler); signal(SIGILL, fuzzTrapHandler)
-            let fixture = URL(fileURLWithPath: CommandLine.arguments.first { $0.hasSuffix("sample.bin") }
-                ?? "Packages/MAVLinkKit/Tests/MAVLinkKitTests/Fixtures/sample.bin")
-            guard let base = try? Data(contentsOf: fixture) else { return c.check("fixture readable", false, fixture.path) }
-            var rng = SystemRandomNumberGenerator()
-            var ok = 0, threw = 0
-            let n = Int(c.args.extra["iterations"] ?? "20000") ?? 20000
-            let t0 = Date()
-            for i in 0..<n {
-                fuzzIteration = i
-                var d = [UInt8](base)
-                switch i % 4 {
-                case 0: for _ in 0..<Int.random(in: 1...20, using: &rng) { d[Int.random(in: 0..<d.count, using: &rng)] = UInt8.random(in: 0...255, using: &rng) }
-                case 1: d = Array(d.prefix(Int.random(in: 0..<d.count, using: &rng)))
-                case 2: // corrupt a FMT record's length/format fields (FMT = A3 95 80)
-                    if let k = (0..<(d.count - 6)).filter({ d[$0] == 0xA3 && d[$0 + 1] == 0x95 && d[$0 + 2] == 0x80 }).randomElement(using: &rng) {
-                        d[k + 4] = UInt8.random(in: 0...255, using: &rng); d[k + 3] = UInt8.random(in: 0...255, using: &rng)
-                    }
-                default: d = (0..<Int.random(in: 0...4000, using: &rng)).map { _ in UInt8.random(in: 0...255, using: &rng) }
-                    if d.count > 3 && Bool.random(using: &rng) { d[0] = 0xA3; d[1] = 0x95; d[2] = 0x80 }
-                }
-                do { _ = try DataFlashLog.parse(Data(d)); ok += 1 } catch { threw += 1 }
-            }
-            c.metric("dataflash_inputs", n); c.metric("parsed", ok); c.metric("threw", threw)
-            c.metric("seconds", String(format: "%.1f", Date().timeIntervalSince(t0)))
-            c.check("\(n) mutated/random .bin inputs parsed or rejected without a trap", true)
-        }
+        d["probe:dataflash_fuzz"] = dataflashFuzz
         // MAVLinkKit command session: same-command-id overwrite
         d["probe:command_overwrite"] = { (c: Ctx) in
             let s = CommandSession(targetSystem: 1)
@@ -158,6 +131,58 @@ enum Probes {
                     "events=\(ev) pending=\(s.pendingCommands) resent=\(r.messages.count)")
         }
         return d
+    }
+
+    /// Separate, explicitly typed function: as an inline closure it exceeded the CI compiler's type-check budget.
+    static func dataflashFuzz(_ c: Ctx) {
+        signal(SIGTRAP, fuzzTrapHandler)
+        signal(SIGILL, fuzzTrapHandler)
+        let fallback = "Packages/MAVLinkKit/Tests/MAVLinkKitTests/Fixtures/sample.bin"
+        let fixturePath: String = CommandLine.arguments.first(where: { (a: String) -> Bool in a.hasSuffix("sample.bin") }) ?? fallback
+        let fixture = URL(fileURLWithPath: fixturePath)
+        guard let base = try? Data(contentsOf: fixture) else { return c.check("fixture readable", false, fixture.path) }
+        var rng = SystemRandomNumberGenerator()
+        var ok = 0
+        var threw = 0
+        let n: Int = Int(c.args.extra["iterations"] ?? "20000") ?? 20000
+        let t0 = Date()
+        for i in 0..<n {
+            fuzzIteration = i
+            var d: [UInt8] = [UInt8](base)
+            switch i % 4 {
+            case 0:
+                let flips: Int = Int.random(in: 1...20, using: &rng)
+                for _ in 0..<flips {
+                    let k: Int = Int.random(in: 0..<d.count, using: &rng)
+                    d[k] = UInt8.random(in: 0...255, using: &rng)
+                }
+            case 1:
+                let keep: Int = Int.random(in: 0..<d.count, using: &rng)
+                d = Array(d.prefix(keep))
+            case 2: // corrupt a FMT record's length/format fields (FMT = A3 95 80)
+                var fmts: [Int] = []
+                var k = 0
+                while k < d.count - 6 {
+                    if d[k] == 0xA3 && d[k + 1] == 0x95 && d[k + 2] == 0x80 { fmts.append(k) }
+                    k += 1
+                }
+                if let f = fmts.randomElement(using: &rng) {
+                    d[f + 4] = UInt8.random(in: 0...255, using: &rng)
+                    d[f + 3] = UInt8.random(in: 0...255, using: &rng)
+                }
+            default:
+                let len: Int = Int.random(in: 0...4000, using: &rng)
+                var r: [UInt8] = []
+                r.reserveCapacity(len)
+                for _ in 0..<len { r.append(UInt8.random(in: 0...255, using: &rng)) }
+                if r.count > 3 && Bool.random(using: &rng) { r[0] = 0xA3; r[1] = 0x95; r[2] = 0x80 }
+                d = r
+            }
+            do { _ = try DataFlashLog.parse(Data(d)); ok += 1 } catch { threw += 1 }
+        }
+        c.metric("dataflash_inputs", n); c.metric("parsed", ok); c.metric("threw", threw)
+        c.metric("seconds", String(format: "%.1f", Date().timeIntervalSince(t0)))
+        c.check("\(n) mutated/random .bin inputs parsed or rejected without a trap", true)
     }
 
     static func accel(_ c: Ctx, _ p1: Float) {

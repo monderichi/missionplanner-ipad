@@ -19,7 +19,9 @@ let package = Package(name: "Harness", platforms: [.macOS(.v13)],
   dependencies: [.package(path: "$ROOT/Packages/MAVLinkKit")],
   targets: [.target(name: "UIKit", path: "Sources/UIKit"),
             .executableTarget(name: "Harness", dependencies: ["UIKit", .product(name: "MAVLinkKit", package: "MAVLinkKit")],
-                              path: "Sources/Harness", swiftSettings: [.unsafeFlags(["-swift-version", "5"])])])
+                              path: "Sources/Harness", swiftSettings: [.unsafeFlags(["-swift-version", "5",
+                                 // test code only: CI's slower compiler gave up on long probe closures at the default 600 ms
+                                 "-Xfrontend", "-solver-expression-time-threshold=3000"])])])
 PKGEOF
 cd "$PKG"
 # HARNESS_SANITIZE=thread|address builds a sanitizer variant in its own scratch dir
