@@ -60,7 +60,29 @@ final class CalibrationStore: ObservableObject {
 
     func startAccel() {
         accel = .starting
+        startSentAt = Date()
+        startAttempts = 1
         commands?.sendOnce(AccelCalCmd.preflightCalibration, params: [0, 0, 0, 0, 1, 0, 0], label: "Accelerometer calibration")
+    }
+
+    /// BUG-021: the start is sent once (a repeat would restart a running calibration). ArduPilot asks for position 1
+    /// every second once it has started, so 5 s in `.starting` without any request means the start was lost: resend it,
+    /// at most 3 times, then fail with an explanation.
+    private var startSentAt: Date?
+    private var startAttempts = 0
+
+    /// Called ~4 Hz by LinkManager.
+    func tick() {
+        guard accel == .starting, let t = startSentAt, Date().timeIntervalSince(t) > 5 else { return }
+        if startAttempts >= 3 {
+            accel = .failed
+            startSentAt = nil
+            commands?.lastResult = "Accelerometer calibration: no answer from the vehicle"
+            return
+        }
+        startAttempts += 1
+        startSentAt = Date()
+        commands?.sendOnce(AccelCalCmd.preflightCalibration, params: [0, 0, 0, 0, 1, 0, 0], label: "Accelerometer calibration (resent)")
     }
 
     func confirmPosition() {

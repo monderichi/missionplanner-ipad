@@ -841,9 +841,9 @@ tagged `// BUG-0xx:` in the code. Verification on the fixed code:
 
 | Check | Before | After |
 |---|---|---|
-| Unit tests (`swift test` / stand-in) | 51 pass + 4 regression tests failing | **55/55 pass** (regression tests now in `Packages/MAVLinkKit/Tests`) |
+| Unit tests (`swift test` / stand-in) | 51 pass + 4 regression tests failing | **59/59 pass** (regression tests now in `Packages/MAVLinkKit/Tests`; after review 1) |
 | Fake-drone scenarios + probes (`run.py -j 4 all`) | 16 CRASH, 24 FAIL | **0 CRASH; 86/86 PASS** (the two by-design edge cases now assert the intended behaviour) |
-| ArduCopter/Rover/Sub 4.7.3 SITL (`run.py -j 4 sitl`) | lossy mission upload failed 4/5 | **21/21 PASS** incl. 3/3 lossy uploads (BUG-033) |
+| ArduCopter/Rover/Sub 4.7.3 SITL (`run.py -j 4 sitl`) | lossy mission upload failed 4/5 | **21/21 PASS** incl. 3/3 lossy uploads with last-item read-back (BUG-033) |
 | Thread Sanitizer (6 link scenarios) | 4 races | **0 races** (BUG-032) |
 | Mac Catalyst UI, crash tests (BUG-003/-004/-005/-006/-007) | app crashed in each | **no crash** |
 | Mac Catalyst UI, BUG-001 / -008 / -013 | banner hidden / no warning / no confirmation | **pass** |

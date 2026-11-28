@@ -10,6 +10,12 @@ final class SimulatedMissionVehicle {
     /// MISSION_ACK INVALID_SEQUENCE (13) plus a re-request, and a re-sent final item after completion gets ERROR (1)
     /// instead of a second ACCEPTED.
     var arduPilotLike = false
+    /// Review 1 (BUG-033): ArduPilot writes items to storage as they arrive and cancels an upload after 8 s without one,
+    /// keeping the mix of new and old items. `dropSeq` loses every copy of that item (an ELRS dropout on the last item).
+    var writeThrough = false
+    var dropSeq: Int?
+    var now: TimeInterval = 0
+    private var lastItemTime: TimeInterval = 0
     private var uploading: (type: UInt8, count: Int, items: [Int: MissionItem])?
     /// Last finished upload: a re-sent final item (our ACK was lost) is ACKed again.
     private var lastCompleted: (type: UInt8, count: Int)?
@@ -25,6 +31,15 @@ final class SimulatedMissionVehicle {
         let parser = MAVLinkParser()
         for f in frames where !lost() {
             for p in parser.parse(f) {
+                if writeThrough, let u = uploading, now - lastItemTime > 8 {
+                    uploading = nil // ArduPilot: upload timed out, cancelled; what was written stays
+                    _ = u
+                }
+                if let m = p.decode(MAV.MissionItemInt.self), let d = dropSeq, Int(m.seq) == d { continue }
+                if arduPilotLike, p.decode(MAV.MissionRequestList.self) != nil, uploading != nil {
+                    out.append(MAV.MissionAck(targetSystem: 255, targetComponent: 190, type: 14, missionType: 0)) // DENIED
+                    continue
+                }
                 if let r = p.decode(MAV.MissionRequestList.self) {
                     out.append(MAV.MissionCount(count: UInt16(stored[r.missionType]!.count), targetSystem: 255,
                                                 targetComponent: 190, missionType: r.missionType))
@@ -34,6 +49,10 @@ final class SimulatedMissionVehicle {
                     }
                 } else if let c = p.decode(MAV.MissionCount.self) {
                     uploading = (c.missionType, Int(c.count), [:])
+                    lastItemTime = now
+                    if writeThrough { // ArduPilot truncates to the new count; old items stay until overwritten
+                        stored[c.missionType] = Array((stored[c.missionType] ?? []).prefix(Int(c.count)))
+                    }
                     if c.count == 0 {
                         stored[c.missionType] = []
                         out.append(MAV.MissionAck(targetSystem: 255, targetComponent: 190, type: 0, missionType: c.missionType))
@@ -47,6 +66,8 @@ final class SimulatedMissionVehicle {
                     out.append(request(want, u.type))
                 } else if let m = p.decode(MAV.MissionItemInt.self), var u = uploading, m.missionType == u.type {
                     u.items[Int(m.seq)] = MissionItem(m)
+                    lastItemTime = now
+                    if writeThrough, Int(m.seq) < (stored[u.type]?.count ?? 0) { stored[u.type]![Int(m.seq)] = MissionItem(m) }
                     uploading = u
                     if let next = (0..<u.count).first(where: { u.items[$0] == nil }) {
                         out.append(request(next, u.type))
@@ -60,6 +81,9 @@ final class SimulatedMissionVehicle {
                           m.missionType == done.type, Int(m.seq) == done.count - 1 {
                     out.append(MAV.MissionAck(targetSystem: 255, targetComponent: 190, type: arduPilotLike ? 1 : 0,
                                               missionType: done.type))
+                } else if arduPilotLike, let m = p.decode(MAV.MissionItemInt.self), uploading == nil {
+                    // not receiving (e.g. after the 8 s timeout): ArduPilot answers ERROR
+                    out.append(MAV.MissionAck(targetSystem: 255, targetComponent: 190, type: 1, missionType: m.missionType))
                 }
             }
         }
@@ -88,6 +112,7 @@ final class MissionTests: XCTestCase {
         let parser = MAVLinkParser()
         while t < limit {
             var next: [MAVLinkMessage] = []
+            v.now = t
             for reply in v.receive(toSend.map { gcs.pack(any: $0) }) {
                 for p in parser.parse(reply) {
                     let r = s.handle(p, now: t)
@@ -117,11 +142,28 @@ final class MissionTests: XCTestCase {
         return items
     }
 
+    /// BUG-033 (review 1): the final item is lost until the vehicle's 8 s upload timeout; the vehicle keeps its OLD last
+    /// item and the count still matches. The session must not report "uploaded".
+    func testUploadNotConfirmedWhenVehicleKeptOldLastItem() {
+        let v = SimulatedMissionVehicle(dropRate: 0)
+        v.arduPilotLike = true
+        v.writeThrough = true
+        let old = sampleMission(3)
+        v.stored[0] = old
+        var edited = old
+        edited[edited.count - 1] = MissionItem(seq: UInt16(edited.count - 1), command: MissionCmd.land, latitude: -35.1, longitude: 149.1, altitude: 0)
+        v.dropSeq = edited.count - 1
+        let s = MissionSession(targetSystem: 1, config: .narrowLink)
+        let up = run(s, v, start: s.startUpload(.mission, items: edited, now: 0))
+        XCTAssertFalse(up.contains(.uploaded(type: .mission, count: edited.count)), "stale last item reported as uploaded: \(up.suffix(2))")
+        XCTAssertEqual(v.stored[0]?.last?.command, old.last?.command, "the simulated vehicle should still hold the old last item")
+    }
+
     /// BUG-033: uploads to an ArduPilot-like vehicle at 30 % loss each way must all end "uploaded" (verified by read-back
-    /// when the final ACK is lost), never "Invalid sequence" / "Error".
+    /// when the final ACK is lost), never "Invalid sequence" / "Error". Review 1: 200 runs, no failure allowed.
     func testUploadToArduPilotLikeVehicleSurvivesLoss() {
         var failures: [String] = []
-        for attempt in 0..<60 {
+        for attempt in 0..<200 {
             let v = SimulatedMissionVehicle(dropRate: 0.3)
             v.arduPilotLike = true
             let s = MissionSession(targetSystem: 1, config: .narrowLink)
@@ -130,7 +172,7 @@ final class MissionTests: XCTestCase {
             if !up.contains(.uploaded(type: .mission, count: items.count)) { failures.append("run \(attempt): \(up.suffix(1))") }
             else if v.stored[0]?.count != items.count { failures.append("run \(attempt): stored \(v.stored[0]?.count ?? -1)") }
         }
-        XCTAssertTrue(failures.count <= 3, "\(failures.count)/60 failed: \(failures.prefix(3))")
+        XCTAssertEqual(failures.count, 0, "\(failures.count)/200 failed: \(failures.prefix(3))")
     }
 
     func testUploadThenDownloadRoundTripsThroughLossyLink() {

@@ -92,6 +92,7 @@ final class LinkManager: ObservableObject {
 
     /// Plays a .tlog through the normal pipeline (read-only).
     func startReplay(url: URL) {
+        speech.muted = true // review 1: before disconnect(), so the reset isn't announced either (BUG-025)
         disconnect()
         connectGeneration += 1
         isReplaying = true
@@ -200,8 +201,9 @@ final class LinkManager: ObservableObject {
                 guard let self, gen == self.connectGeneration else { return }
                 self.state = s
                 if case .failed = s, self.isReplaying { // BUG-026: a replay that can't load ends replay mode
-                    self.isReplaying = false
+                    self.disconnect()            // review 1: also stops the replay transport and timers
                     self.speech.muted = false
+                    self.state = s               // keep the failure message visible
                 }
             }
         }
@@ -234,6 +236,7 @@ final class LinkManager: ObservableObject {
         ioQueue.sync {
             ioGeneration = -1
             uiBatch = []
+            uiFlushScheduled = false // review 1: a fresh link must not wait on the old link's flush
             tlog?.close()
             tlog = nil
         }
@@ -326,6 +329,7 @@ final class LinkManager: ObservableObject {
             self?.commands.tick()
             self?.mission.tick()
             self?.logs.tick()
+            self?.calibration.tick() // BUG-021
         }
         controlTimer = control
         control.resume()

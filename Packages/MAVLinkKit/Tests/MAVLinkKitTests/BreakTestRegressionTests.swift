@@ -8,8 +8,7 @@ final class BreakTestRegressionTests: XCTestCase {
         MAV.CommandAck(command: cmd, result: result, progress: 0, resultParam2: 0, targetSystem: 255, targetComponent: 190)
     }
 
-    /// BUG-002: CommandSession keys pending commands by command id only, so Disarm sent before the
-    /// Arm ACK arrives is completed by the Arm ACK and never retried.
+    /// BUG-002: Disarm sent before the Arm ACK arrives must not be completed by the Arm ACK.
     func test_BUG002_disarmNotCompletedByEarlierArmAck() {
         let s = CommandSession(targetSystem: 1)
         _ = s.arm(true, now: 0)
@@ -20,18 +19,53 @@ final class BreakTestRegressionTests: XCTestCase {
         XCTAssertTrue(!s.pendingCommands.isEmpty || !r.messages.isEmpty, "disarm was silently dropped")
     }
 
-    /// BUG-002 variant: two mode changes in a row; the ACK of the first must not complete the second, which is then
-    /// sent and tracked (retried) on its own.
+    /// BUG-002 (review 1): LOITER then RTL: RTL goes out at once, LOITER's (ambiguous) ACK doesn't complete it, and
+    /// RTL is the one retried.
     func test_BUG002_secondModeChangeRetriedAfterFirstAck() {
         let s = CommandSession(targetSystem: 1)
-        _ = s.setMode(5, now: 0)          // LOITER (delivered)
-        let second = s.setMode(6, now: 0.05) // RTL: queued behind LOITER (same command id)
-        XCTAssertTrue(second.isEmpty, "RTL must wait until LOITER's ACK so the ACKs can't be confused")
-        _ = s.handle(ack(MAVCmd.doSetMode), now: 0.3) // ACK for LOITER
-        XCTAssertEqual(s.pendingCommands, [MAVCmd.doSetMode], "RTL must still be pending")
-        let r = s.tick(now: 0.35)
-        let sent = r.messages.compactMap { $0 as? MAV.CommandLong }
-        XCTAssertEqual(sent.first?.param2, 6, "RTL must be sent once LOITER is resolved")
+        _ = s.setMode(5, now: 0)               // LOITER
+        let second = s.setMode(6, now: 0.05)   // RTL supersedes at once
+        XCTAssertEqual((second.first as? MAV.CommandLong)?.param2, 6, "RTL must be sent immediately")
+        XCTAssertTrue(s.handle(ack(MAVCmd.doSetMode), now: 0.3).isEmpty, "an ACK inside the ambiguity window is not RTL's")
+        XCTAssertEqual(s.pendingCommands, [MAVCmd.doSetMode])
+        let r = s.tick(now: 2.0)
+        XCTAssertEqual((r.messages.first as? MAV.CommandLong)?.param2, 6, "RTL (not LOITER) is retried")
+    }
+
+    /// Review 1: ARM, then DISARM 0.5 s later on the ELRS config with the ACKs lost: DISARM is on the wire at once and the
+    /// ARM is never resent again.
+    func test_BUG002_disarmSentAtOnceAndArmNotResent() {
+        let s = CommandSession(targetSystem: 1, config: .narrowLink)
+        _ = s.arm(true, now: 0)
+        let d = s.arm(false, now: 0.5)
+        XCTAssertEqual((d.first as? MAV.CommandLong)?.param1, 0, "DISARM must go out immediately")
+        var resent: [Float] = []
+        var t = 0.5
+        while t < 20 { t += 0.25; resent += s.tick(now: t).messages.compactMap { ($0 as? MAV.CommandLong)?.param1 } }
+        XCTAssertFalse(resent.contains(1), "ARM was resent after DISARM: \(resent)")
+    }
+
+    /// Review 1: force-disarm while an ARM is in flight: the ARM's ACK must not "accept" it; it is retried.
+    func test_BUG002_forceDisarmNotAcceptedByArmAck() {
+        let s = CommandSession(targetSystem: 1)
+        _ = s.arm(true, now: 0)
+        XCTAssertEqual(s.arm(false, force: true, now: 0.1).count, 1, "force-disarm goes out immediately")
+        XCTAssertTrue(s.handle(ack(MAVCmd.componentArmDisarm), now: 0.2).isEmpty)
+        let r = s.tick(now: 2.0)
+        XCTAssertEqual((r.messages.first as? MAV.CommandLong)?.param2, 21196, "force-disarm must be retried")
+        XCTAssertEqual(s.confirmByState(MAVCmd.componentArmDisarm), [.accepted(command: MAVCmd.componentArmDisarm)])
+    }
+
+    /// Review 1: servo 5, 6, 7 tapped quickly: every channel is sent (FIFO), none dropped.
+    func test_BUG002_servoTapsAreNotDropped() {
+        let s = CommandSession(targetSystem: 1)
+        var sent: [Float] = []
+        for ch in [Float(5), 6, 7] { sent += s.send(183, params: [ch, 1900], now: 0).compactMap { ($0 as? MAV.CommandLong)?.param1 } }
+        for _ in 0..<2 {
+            _ = s.handle(ack(183), now: 0.3)
+            sent += s.tick(now: 0.5).messages.compactMap { ($0 as? MAV.CommandLong)?.param1 }
+        }
+        XCTAssertEqual(sent, [5, 6, 7])
     }
 
     /// BUG-002: emergency force-disarm is never queued.

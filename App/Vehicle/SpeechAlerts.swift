@@ -34,7 +34,11 @@ final class SpeechAlerts: ObservableObject {
             }
             .store(in: &bag)
         v.$armed.removeDuplicates().dropFirst()
-            .sink { [weak self] armed in self?.say(armed ? "Armed" : "Disarmed") }
+            // review 1: reset() on Disconnect/Replay clears `armed`; only announce changes the live vehicle reports.
+            .sink { [weak self, weak v] armed in
+                guard let v, v.heartbeatAlive else { return }
+                self?.say(armed ? "Armed" : "Disarmed")
+            }
             .store(in: &bag)
         v.$heartbeatAlive.removeDuplicates().dropFirst()
             .sink { [weak self] alive in

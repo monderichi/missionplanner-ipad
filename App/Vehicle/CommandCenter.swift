@@ -24,6 +24,7 @@ final class CommandCenter: ObservableObject {
 
     /// BUG-027: a session replaced/removed while commands were in flight: say so instead of "Arming…" forever.
     private func abandonPending() {
+        defer { labelQueue = [:]; sentAt = [:] }
         if let s = session, !s.pendingCommands.isEmpty {
             lastResult = "\(name(s.pendingCommands[0])): link changed, not confirmed"
             lastResultOK = false
@@ -46,6 +47,7 @@ final class CommandCenter: ObservableObject {
     func arm(_ arm: Bool, force: Bool = false) {
         guard let session else { return }
         session.arm(arm, force: force, now: now).forEach { send?($0) }
+        sentAt[MAVCmd.componentArmDisarm] = Date()
         requestedArm = arm
         lastResult = arm ? "Arming…" : (force ? "Force disarming…" : "Disarming…")
         refreshPending()
@@ -54,6 +56,7 @@ final class CommandCenter: ObservableObject {
     func setMode(_ mode: UInt32, name: String) {
         guard let session else { return }
         session.setMode(mode, now: now).forEach { send?($0) }
+        sentAt[MAVCmd.doSetMode] = Date()
         requestedMode = mode
         lastResult = "Changing mode to \(name)…"
         refreshPending()
@@ -69,10 +72,35 @@ final class CommandCenter: ObservableObject {
     /// Generic tracked command (retried until COMMAND_ACK).
     func command(_ command: UInt16, params: [Float], label: String) {
         guard let session else { return }
-        session.send(command, params: params, now: now).forEach { send?($0) }
-        names[command] = label
-        lastResult = "\(label)…"
+        let out = session.send(command, params: params, now: now)
+        out.forEach { send?($0) }
+        if out.isEmpty {
+            // BUG-002 (review 1): queued behind an in-flight command with the same id; keep its label in order so the
+            // results name the right servo/relay/motor.
+            labelQueue[command, default: []].append(label)
+            lastResult = "\(label)… (queued)"
+        } else {
+            names[command] = label
+            lastResult = "\(label)…"
+        }
+        sentAt[command] = Date()
         refreshPending()
+    }
+
+    /// Labels of commands queued behind an in-flight one with the same id (FIFO, mirrors CommandSession's queue).
+    private var labelQueue: [UInt16: [String]] = [:]
+    /// When the in-flight arm/disarm or mode command was (last) sent: only a HEARTBEAT after this confirms it.
+    private var sentAt: [UInt16: Date] = [:]
+
+    /// BUG-002: confirm arm/disarm and mode changes from the vehicle's HEARTBEAT (COMMAND_ACKs are ambiguous after a
+    /// superseded command and may be lost on ELRS). Only a heartbeat received ≥ 0.3 s after the send counts.
+    private func confirmFromVehicleState() {
+        guard let session, let v = vehicle, v.heartbeatAlive, let hb = v.lastHeartbeat else { return }
+        for cmd in [MAVCmd.componentArmDisarm, MAVCmd.doSetMode] {
+            guard let m = session.inFlight(cmd), let t = sentAt[cmd], hb.timeIntervalSince(t) >= 0.3 else { continue }
+            let reached = cmd == MAVCmd.componentArmDisarm ? v.armed == (m.param1 == 1) : v.customMode == UInt32(exactly: m.param2)
+            if reached { session.confirmByState(cmd).forEach { apply($0) } }
+        }
     }
 
     /// Sent exactly once, never retried: for commands where a repeat would restart something
@@ -140,6 +168,7 @@ final class CommandCenter: ObservableObject {
         let r = session.tick(now: now)
         r.messages.forEach { send?($0) }
         r.events.forEach { apply($0) }
+        confirmFromVehicleState()
         if !r.events.isEmpty || !r.messages.isEmpty { refreshPending() }
     }
 
@@ -158,6 +187,23 @@ final class CommandCenter: ObservableObject {
     }
 
     private func apply(_ e: CommandSession.Event) {
+        applyResult(e)
+        // BUG-002 (review 1): the next queued command with this id goes out now: show it as sending, with its own label.
+        switch e {
+        case .accepted(let cmd), .rejected(let cmd, _), .timedOut(let cmd):
+            if var q = labelQueue[cmd], !q.isEmpty {
+                let next = q.removeFirst()
+                labelQueue[cmd] = q.isEmpty ? nil : q
+                names[cmd] = next
+                lastResult = "\(next)…"
+                lastResultOK = true
+            }
+        case .inProgress: break
+        }
+        refreshPending()
+    }
+
+    private func applyResult(_ e: CommandSession.Event) {
         switch e {
         case .accepted(let cmd) where quiet.contains(cmd),
              .rejected(let cmd, _) where quiet.contains(cmd),

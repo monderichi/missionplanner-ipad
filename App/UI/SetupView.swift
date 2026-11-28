@@ -463,9 +463,9 @@ struct RadioPage: View {
                     HStack {
                         Text("CH\(i + 1)").frame(width: 46, alignment: .leading).monospacedDigit()
                         ProgressView(value: Double(min(max(Int(v), 800), 2200) - 800), total: 1400)
-                        Text(verbatim: v == 0 || v == UInt16.max ? "—" : String(v)) // BUG-036: no locale grouping ("1.500").frame(width: 50, alignment: .trailing).monospacedDigit()
+                        Text(verbatim: v == 0 || v == UInt16.max ? "—" : String(v)) /* BUG-036: no locale grouping ("1.500") */ .frame(width: 50, alignment: .trailing).monospacedDigit()
                         if capturing && maxs[i] > mins[i] {
-                            Text("\(mins[i])–\(maxs[i])").font(.caption).frame(width: 90).monospacedDigit()
+                            Text(verbatim: "\(mins[i])–\(maxs[i])") /* BUG-036 */.font(.caption).frame(width: 90).monospacedDigit()
                         }
                     }
                 }

@@ -126,7 +126,8 @@ struct ConnectView: View {
                 }
 
                 Section {
-                    if link.state.isActive {
+                    // review 1: also while a link is failed/retrying (TCP and UDP reopen every 2 s until Disconnect)
+                    if link.state != .disconnected || link.isReplaying {
                         Button("Disconnect", role: .destructive) {
                             guarded("Disconnect") { link.disconnect() }
                         }

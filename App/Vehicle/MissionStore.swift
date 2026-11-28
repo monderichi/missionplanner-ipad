@@ -100,6 +100,7 @@ final class MissionStore: ObservableObject {
 
     func read(_ type: MissionType) {
         guard let session, !session.isBusy else { return }
+        guidedSent = nil // review 1: this transfer's MISSION_ACK must not be read as the fly-here answer
         session.startDownload(type, now: now).forEach { send?($0) }
         busy = type
         progress = nil
@@ -108,6 +109,7 @@ final class MissionStore: ObservableObject {
 
     func write(_ type: MissionType) {
         guard let session, !session.isBusy else { return }
+        guidedSent = nil // review 1
         var items: [MissionItem]
         switch type {
         case .mission:
@@ -160,6 +162,11 @@ final class MissionStore: ObservableObject {
 
     func tick() {
         guard let session else { return }
+        // BUG-011 (review 1): no MISSION_ACK within 5 s: say so instead of "sent…" forever.
+        if let g = guidedSent, Date().timeIntervalSince(g.0) > 5 {
+            guidedSent = nil
+            banner = "Fly here: no answer from the vehicle (target \(g.1))"
+        }
         let r = session.tick(now: now)
         r.messages.forEach { send?($0) }
         r.events.forEach(apply)

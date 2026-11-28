@@ -164,6 +164,9 @@ def remap(args, slot):
 
 
 def harness_bin():
+    # HARNESS_BIN=<path>: reuse an already built harness (lets parallel run.py invocations share one build)
+    if os.environ.get("HARNESS_BIN") and os.path.exists(os.environ["HARNESS_BIN"]):
+        return os.environ["HARNESS_BIN"]
     out = subprocess.run([os.path.join(ROOT, "testing", "harness", "build_harness.sh")], capture_output=True, text=True)
     path = out.stdout.strip().splitlines()[-1] if out.stdout.strip() else ""
     if out.returncode != 0 or not os.path.exists(path):

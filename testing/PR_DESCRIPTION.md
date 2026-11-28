@@ -7,11 +7,14 @@ fix is listed in `testing/FIX_LOG.md` with its cause, change and proof. Code cha
 ### What changes for pilots
 - **Link loss is never hidden.** NO HEARTBEAT shows whenever the heartbeat stops, including after a TCP failure. TCP
   reconnects by itself, and the top bar shows "—" instead of stale ARMED/mode/battery values (BUG-001, -012).
-- **Commands are confirmed correctly.** A Disarm or RTL sent right after Arm or Loiter is no longer "confirmed" by the
-  earlier ACK. It is queued and retried, and force-disarm is never delayed (BUG-002). A lost ACK is checked against
-  the heartbeat before an error is shown (BUG-017).
+- **Commands are confirmed correctly.** A Disarm/RTL sent right after Arm/Loiter goes out immediately, the superseded
+  command is never resent, and the earlier ACK can't confirm it: it is confirmed by a later ACK or by the vehicle's
+  heartbeat (armed flag / mode). Force-disarm works the same way and is retried until confirmed. Servo/relay/motor
+  commands queue in order, so none is dropped (BUG-002). A lost ACK is checked against the heartbeat before an
+  error is shown (BUG-017).
 - **Mission upload works on lossy links to real ArduPilot.** INVALID_SEQUENCE is no longer fatal, and a lost final
-  ACK is verified by reading back the count. Lossy SITL uploads went from 4/5 failing to 3/3 passing (BUG-033).
+  ACK is verified by reading back the count and the last item (a vehicle that timed out keeps its old last item).
+  Lossy SITL uploads went from 4/5 failing to 3/3 passing (BUG-033).
 - **No more crashes** from NaN/Inf/out-of-range telemetry, corrupt files, FLTMODE_CH = 0, a huge takeoff altitude,
   a latitude typo, missions over 65 535 items, or a malformed ACCELCAL message (BUG-003…-007, -009, -010).
 - **Warnings are visible.** A HUD banner shows failsafe/fence/EKF/battery messages and low/critical battery, with
@@ -26,12 +29,13 @@ fix is listed in `testing/FIX_LOG.md` with its cause, change and proof. Code cha
 ### How it was tested
 | Check | Result |
 |---|---|
-| MAVLinkKit unit tests (incl. new regression tests and an ArduPilot-like lossy mission vehicle) | 55/55 |
+| MAVLinkKit unit tests (incl. new regression tests and an ArduPilot-like lossy mission vehicle) | 59/59 |
 | Headless app harness vs fake drone: scenarios, crash probes, fuzzers (`python3 testing/scenarios/run.py -j 4 all`) | 86/86, 0 crashes (before: 16 crashes, 24 fails) |
 | ArduCopter/Rover/Sub 4.7.3 SITL (`run.py -j 4 sitl`) | 21/21 |
 | Thread Sanitizer on the link scenarios | 0 races (before: 4) |
 | Mac Catalyst UI tests (`testing/sim/catalyst.sh uitest`) | the former crash tests and BUG-001/-008/-013 pass; remaining failures are XCUITest limits (ADS-B labels, list scrolling) |
 
+Independent review: `testing/REVIEW_1.md` (7 required changes, all applied, see `testing/FIX_LOG.md`).
 New CI job `break-test` runs the harness scenarios and probes on every push and PR.
 
 ### Known remaining (documented)

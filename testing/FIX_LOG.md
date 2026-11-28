@@ -58,3 +58,16 @@ Code comments at each change are tagged `// BUG-0xx:`.
 | TEST-031 | Identifiers: `connect.button`, `status.link`, `actions.arm`, `actions.disarm`, `plan.file`, `map.menu`, `setup.<page>`, `banner.noHeartbeat`, `banner.noAttitude`, `banner.warning`. | UI tests |
 | (regression) | Batched UI updates could re-populate the model after Disconnect: the main-queue apply now checks the connection generation. | `stale_after_disconnect.sh` ×3 PASS |
 | Version | `MARKETING_VERSION` 0.4.0 → 0.5.0 (project.yml, TESTING.md A2). | — |
+
+## Review 1 (testing/REVIEW_1.md): required changes applied
+
+| # | Change | Proof |
+|---|---|---|
+| 1 | BUG-002 redesigned: a newer arm/disarm or mode command is **sent immediately** and the superseded one is never resent. ACKs within one timeout are ambiguous and ignored; the command is confirmed by a later ACK or by the HEARTBEAT armed flag / custom mode received ≥ 0.3 s after sending (`CommandSession.confirmByState`, `CommandCenter.confirmFromVehicleState`). | `test_BUG002_disarmSentAtOnceAndArmNotResent`, `test_BUG002_secondModeChangeRetriedAfterFirstAck`, `sitl_arm.sh` |
+| 2 | Force-disarm after an in-flight ARM is not "accepted" by the ARM's ACK; it is retried until a later ACK or a disarmed heartbeat. | `test_BUG002_forceDisarmNotAcceptedByArmAck` |
+| 3 | Other commands (servo, relay, motor test, REQUEST_MESSAGE) queue FIFO per id: every tap is sent. Labels follow the queue, so results name the right channel, and a released command shows "…" again. | `test_BUG002_servoTapsAreNotDropped` |
+| 4 | BUG-033 verification reads back the **last item** after the count matches (command, position, altitude ±5 cm); a vehicle that is still receiving gets its re-requested item (back to upload), and DENIED means "keep waiting". | `testUploadNotConfirmedWhenVehicleKeptOldLastItem`, `testUploadToArduPilotLikeVehicleSurvivesLoss` (200 runs, 0 failures), `sitl_lossy*.sh` |
+| 5 | Speech announces Armed/Disarmed only for a live vehicle; replay mutes speech before disconnecting. | code |
+| 6 | RC page: layout modifiers restored (a `//` comment had swallowed them); capture min/max use `Text(verbatim:)`. | UI `test_D4_radioBars` |
+| 7 | Disconnect is shown whenever a link exists (also while failed/retrying) or a replay runs. | code |
+| opt. | CI comment moved to the simulator job and `-j 2`; UI batch flag reset on disconnect; fly-here 5 s no-answer message and its ACK window cleared by other mission operations; a failed replay fully disconnects. Also: the accel-cal start is resent (≤ 3×) when no position request arrives within 5 s. | `accel_cal_lossy*.sh` |

@@ -34,12 +34,18 @@ public final class CommandSession {
         var message: MAV.CommandLong
         var attempts: Int
         var lastSent: TimeInterval
+        /// BUG-002: ACKs before this time may belong to the command this one superseded (COMMAND_ACK has no request id):
+        /// they don't resolve it. It is confirmed by a later ACK, or by vehicle state (`confirmByState`).
+        var ambiguousUntil: TimeInterval = -.infinity
     }
     private var pending: [UInt16: Pending] = [:]
-    /// BUG-002: COMMAND_ACK carries only the command id, so two in-flight commands with the same id can't be told apart
-    /// (an ARM's ACK used to "confirm" a DISARM sent right after it). A second command with the same id therefore waits
-    /// here until the first one is resolved, then goes out (via tick) and is tracked and retried on its own.
-    private var queued: [UInt16: MAV.CommandLong] = [:]
+    /// BUG-002 (review 1): commands whose param1 selects *what* is addressed (servo channel, relay, motor, message id)
+    /// wait in order behind an in-flight command with the same id; every one of them is sent.
+    private var queued: [UInt16: [MAV.CommandLong]] = [:]
+
+    /// BUG-002: for these, the newest request replaces the in-flight one at once (the pilot changed their mind):
+    /// arm/disarm and flight mode. The old one is never resent again.
+    public static let supersedable: Set<UInt16> = [MAVCmd.componentArmDisarm, MAVCmd.doSetMode]
 
     public init(targetSystem: UInt8, targetComponent: UInt8 = 1, config: Config = Config()) {
         self.targetSystem = targetSystem
@@ -47,7 +53,13 @@ public final class CommandSession {
         self.config = config
     }
 
-    public var pendingCommands: [UInt16] { Set(pending.keys).union(queued.keys).sorted() }
+    public var pendingCommands: [UInt16] { Set(pending.keys).union(queued.filter { !$0.value.isEmpty }.keys).sorted() }
+
+    /// The in-flight message for a command id (to know what an event refers to).
+    public func inFlight(_ command: UInt16) -> MAV.CommandLong? { pending[command]?.message }
+
+    /// Number of commands with this id waiting behind the in-flight one.
+    public func queuedCount(_ command: UInt16) -> Int { queued[command]?.count ?? 0 }
 
     public func send(_ command: UInt16, params p: [Float] = [], now: TimeInterval) -> [MAVLinkMessage] {
         let v = p + [Float](repeating: 0, count: max(0, 7 - p.count))
@@ -55,22 +67,33 @@ public final class CommandSession {
                                   param5: v[4], param6: v[5], param7: v[6], command: command,
                                   targetSystem: targetSystem, targetComponent: targetComponent, confirmation: 0)
         if pending[command] != nil {
-            // BUG-002: emergency force-disarm never waits behind another arm/disarm.
-            let forceDisarm = command == MAVCmd.componentArmDisarm && v[0] == 0 && v[1] == 21196
-            if !forceDisarm {
-                queued[command] = msg // the newest request wins; an older queued one is dropped
-                return []
+            if Self.supersedable.contains(command) {
+                // BUG-002 (review 1): send the newer arm/disarm or mode change immediately and stop retrying the
+                // superseded one (a late ARM retry could re-arm after DISARM). ACKs within one timeout are ambiguous.
+                pending[command] = Pending(message: msg, attempts: 1, lastSent: now, ambiguousUntil: now + config.timeout)
+                return [msg]
             }
-            queued[command] = nil
+            queued[command, default: []].append(msg) // FIFO: each servo/relay/motor/message request goes out
+            return []
         }
         pending[command] = Pending(message: msg, attempts: 1, lastSent: now)
         return [msg]
     }
 
-    /// BUG-002: the earlier command with this id is resolved: release the queued one. tick() sends it at once
-    /// (attempts 0 and lastSent far in the past) and from then on it is retried like any other command.
+    /// BUG-002: the vehicle's own state (HEARTBEAT armed flag / custom mode) shows the in-flight command took effect.
+    public func confirmByState(_ command: UInt16) -> [Event] {
+        guard pending[command] != nil else { return [] }
+        pending[command] = nil
+        releaseQueued(command)
+        return [.accepted(command: command)]
+    }
+
+    /// The earlier command with this id is resolved: the next queued one goes out on the next tick
+    /// (attempts 0, lastSent far in the past) and is then retried on its own.
     private func releaseQueued(_ command: UInt16) {
-        guard let next = queued.removeValue(forKey: command) else { return }
+        guard var q = queued[command], !q.isEmpty else { return }
+        let next = q.removeFirst()
+        queued[command] = q.isEmpty ? nil : q
         pending[command] = Pending(message: next, attempts: 0, lastSent: -.infinity)
     }
 
@@ -91,7 +114,9 @@ public final class CommandSession {
     }
 
     public func handle(_ ack: MAV.CommandAck, now: TimeInterval) -> [Event] {
-        guard pending[ack.command] != nil else { return [] }
+        guard let p = pending[ack.command] else { return [] }
+        // BUG-002: may be the superseded command's ACK. Ignore; a later ACK (after our resend) or the vehicle state decides.
+        if now < p.ambiguousUntil { return [] }
         switch ack.result {
         case MAVResult.accepted.rawValue:
             pending[ack.command] = nil

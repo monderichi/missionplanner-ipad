@@ -46,9 +46,9 @@ The user's original request is kept verbatim at the end; the version below is th
   `testing/FIX_LOG.md` entry + `TESTING_RESULTS.md` status → FIXED. Keep CI green (GitHub Actions builds on push to main;
   check the PR's checks). Commit per bug or small group; push regularly.
 - [x] **7. Open a PR** `bug_fixes` → `main` with a full description (what changed, how it was tested, what remains).
-- [ ] **8. Independent review**: a fresh agent (no access to this conversation) reviews the PR diff for correctness,
+- [x] **8. Independent review**: a fresh agent (no access to this conversation) reviews the PR diff for correctness,
   safety and regressions and writes `testing/REVIEW_<n>.md`.
-- [ ] **9. Apply** the reviewer's required changes (if any), with tests, and push.
+- [x] **9. Apply** the reviewer's required changes (if any), with tests, and push.
 - [ ] **10. Re-run the independent review** on the updated PR.
 - [ ] **11. If the review is OK**: commit, push, merge the PR into `main` (method per "Decisions"); otherwise go back
   to step 9. Afterwards: clean up large temporary data and write the final summary in this file and in the PR.
@@ -107,3 +107,6 @@ The user's original request is kept verbatim at the end; the version below is th
 - 04:10 Step 7 done: PR https://github.com/monderichi/missionplanner-ipad/pull/1 (bug_fixes → main), bound in the app.
   Step 8 started: independent general-purpose agent reviewing; it writes testing/REVIEW_1.md (no code edits).
   BUG-037 re-measured: 48 % → 34 % CPU at 50 Hz (PARTIAL).
+- 04:24 Step 8 done: REVIEW_1.md = CHANGES REQUIRED (7). Step 9 done: all 7 + optional items applied. Verified: unit 59/59,
+  fake drone 86/86 (after updating the no_ack check: the outcome now comes from the heartbeat), SITL 21/21, UI suite 1 9/9.
+  Step 10 next: fresh reviewer → testing/REVIEW_2.md.

@@ -188,8 +188,10 @@ public final class MissionSession {
         case downloadWaitCount(MissionType)
         case downloadItems(MissionType, count: Int, next: Int, items: [MissionItem])
         case upload(MissionType, items: [MissionItem], lastRequested: Int?)
-        /// BUG-033: the final ACK may have been lost; read MISSION_COUNT back to confirm the upload.
-        case uploadVerify(MissionType, count: Int)
+        /// BUG-033: the final ACK may have been lost; read MISSION_COUNT back to confirm the upload…
+        case uploadVerify(MissionType, items: [MissionItem])
+        /// …then the last item (review 1: a vehicle that timed out keeps the OLD last item, and the count still matches).
+        case uploadVerifyLast(MissionType, items: [MissionItem])
     }
 
     public let targetSystem: UInt8
@@ -321,25 +323,73 @@ public final class MissionSession {
                 // BUG-033: after the last item, ERROR usually means our resend reached a vehicle that had already
                 // stored everything (its ACCEPTED was lost; ArduPilot does not re-ACK). Verify by reading the count.
                 if a.type == 1, lastRequested == items.count - 1 {
-                    return startVerify(type, count: items.count, now: now)
+                    return startVerify(type, items: items, now: now)
                 }
                 op = .idle
                 return ([], [.failed(type: type, reason: MAVMissionResult.text(a.type))])
             }
             return ([], [])
 
-        case .uploadVerify(let type, let count):
+        case .uploadVerify(let type, let items):
+            // Still receiving after all? ArduPilot re-requests the item it wants: resume the upload.
+            if let seq = Self.requestedSeq(packet, type), seq < items.count {
+                return resumeUpload(type, items: items, seq: seq, now: now)
+            }
+            if let a = packet.decode(MAV.MissionAck.self), a.missionType == type.rawValue {
+                if a.type == 0 { op = .idle; return ([], [.uploaded(type: type, count: items.count)]) }
+                if a.type == 14 { lastActivity = now; return ([], []) } // DENIED: still receiving, keep waiting
+                return ([], []) // other answers to the list request: wait for MISSION_COUNT or time out
+            }
             guard let c = packet.decode(MAV.MissionCount.self), c.missionType == type.rawValue else { return ([], []) }
+            if Int(c.count) == items.count && items.count <= 1 { // home only: ArduPilot rewrites home itself
+                op = .idle
+                return ([ack(type)], [.uploaded(type: type, count: items.count)])
+            }
+            guard Int(c.count) == items.count else {
+                op = .idle
+                return ([ack(type)], [.failed(type: type, reason: "Not confirmed: vehicle has \(c.count) items, expected \(items.count). Upload again.")])
+            }
+            op = .uploadVerifyLast(type, items: items)
+            lastActivity = now
+            attempts = 0
+            return ([requestItem(type, items.count - 1)], [])
+
+        case .uploadVerifyLast(let type, let items):
+            var got: MissionItem?
+            if let m = packet.decode(MAV.MissionItemInt.self) { got = MissionItem(m) }
+            else if let m = packet.decode(MAV.MissionItem.self) { got = MissionItem(m) }
+            guard let it = got, it.missionType == type.rawValue, Int(it.seq) == items.count - 1 else { return ([], []) }
             op = .idle
-            // End the vehicle's download transfer politely, then report.
-            if Int(c.count) == count { return ([ack(type)], [.uploaded(type: type, count: count)]) }
-            return ([ack(type)], [.failed(type: type, reason: "Not confirmed: vehicle has \(c.count) items, expected \(count)")])
+            if Self.sameItem(it, items[items.count - 1]) {
+                return ([ack(type)], [.uploaded(type: type, count: items.count)])
+            }
+            return ([ack(type)], [.failed(type: type, reason: "Not confirmed: the vehicle's last item differs from the plan. Upload again.")])
         }
     }
 
+    private static func requestedSeq(_ packet: MAVLinkPacket, _ type: MissionType) -> Int? {
+        if let r = packet.decode(MAV.MissionRequestInt.self), r.missionType == type.rawValue { return Int(r.seq) }
+        if let r = packet.decode(MAV.MissionRequest.self), r.missionType == type.rawValue { return Int(r.seq) }
+        return nil
+    }
+
+    private func resumeUpload(_ type: MissionType, items: [MissionItem], seq: Int, now: TimeInterval) -> (messages: [MAVLinkMessage], events: [Event]) {
+        op = .upload(type, items: items, lastRequested: seq)
+        lastActivity = now
+        attempts = 0
+        return ([items[seq].message(targetSystem: targetSystem, targetComponent: targetComponent)],
+                [.progress(type: type, done: seq + 1, total: items.count)])
+    }
+
+    /// Same item as sent, as far as ArduPilot stores it: command, position (1e-7°) and altitude (it keeps cm, so ±5 cm).
+    /// Params are not compared: ArduPilot keeps only the ones a command uses. A stale old item differs in these.
+    static func sameItem(_ a: MissionItem, _ b: MissionItem) -> Bool {
+        a.command == b.command && abs(Int(a.x) - Int(b.x)) <= 1 && abs(Int(a.y) - Int(b.y)) <= 1 && abs(a.z - b.z) <= 0.05
+    }
+
     /// BUG-033: confirm an upload whose final ACK may be lost by asking for the vehicle's item count.
-    private func startVerify(_ type: MissionType, count: Int, now: TimeInterval) -> (messages: [MAVLinkMessage], events: [Event]) {
-        op = .uploadVerify(type, count: count)
+    private func startVerify(_ type: MissionType, items: [MissionItem], now: TimeInterval) -> (messages: [MAVLinkMessage], events: [Event]) {
+        op = .uploadVerify(type, items: items)
         lastActivity = now
         attempts = 0
         return ([MAV.MissionRequestList(targetSystem: targetSystem, targetComponent: targetComponent, missionType: type.rawValue)], [])
@@ -366,7 +416,7 @@ public final class MissionSession {
             type = t
             // BUG-033: retries for the last item ran out: the vehicle may have stored it and lost our ACK. Verify.
             if attempts > config.retries, lastRequested == items.count - 1 {
-                return startVerify(t, count: items.count, now: now)
+                return startVerify(t, items: items, now: now)
             }
             if let seq = lastRequested {
                 resend = items[seq].message(targetSystem: targetSystem, targetComponent: targetComponent)
@@ -376,6 +426,9 @@ public final class MissionSession {
         case .uploadVerify(let t, _):
             type = t
             resend = MAV.MissionRequestList(targetSystem: targetSystem, targetComponent: targetComponent, missionType: t.rawValue)
+        case .uploadVerifyLast(let t, let items):
+            type = t
+            resend = requestItem(t, items.count - 1)
         }
         if attempts > config.retries {
             op = .idle

@@ -136,8 +136,10 @@ enum Scenarios {
         c.link.commands.setMode(5, name: "Loiter")
         let t = c.waitUntil(15) { c.link.commands.pending.isEmpty }
         c.metric("no_ack_timeout_s", t.map { String(format: "%.1f", $0) } ?? "never")
-        c.check("timeout reported (BUG-017: with the real outcome)", (c.link.commands.lastResult ?? "").contains("no ACK")
-                || (c.link.commands.lastResult ?? "").contains("no answer"), c.link.commands.lastResult ?? "nil")
+        // BUG-002/-017: with no ACK the result comes from the heartbeat (accepted, or "no ACK, but …"), never a false error
+        c.waitUntil(3) { c.vehicle.modeName == "Loiter" }
+        c.check("outcome reported from the vehicle state", c.link.commands.lastResultOK && c.vehicle.modeName == "Loiter",
+                c.link.commands.lastResult ?? "nil")
         c.waitUntil(3) { c.vehicle.modeName == "Loiter" }
         c.note("mode actually is \(c.vehicle.modeName) while banner says '\(c.link.commands.lastResult ?? "nil")'")
         c.check("UI does not claim failure when the mode did change", !(c.vehicle.modeName == "Loiter" && c.link.commands.lastResultOK == false),
