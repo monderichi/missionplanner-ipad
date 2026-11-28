@@ -120,8 +120,9 @@ Review R2-1 (`testing/REVIEW_R2_1.md`): **APPROVED**; its optional items were ap
 - Background (quiet) requests don't get a red "link changed" banner.
 
 BUG-037 (still PARTIAL): UI batches now publish at 10 Hz (was 20 Hz), and `messageCounts` (changes on every packet) is
-no longer `@Published`. **Not re-measured**: the Catalyst perf run failed before starting ("Timed out while enabling
-automation mode": macOS needs the user to approve UI automation). Re-measure with
-`testing/sim/catalyst.sh perf BreakTestUITests2/test_perf_highRateAndFlood` (accept < 15 % CPU).
+no longer `@Published`. Measured with `testing/sim/catalyst.sh perf BreakTestUITests2/test_perf_highRateAndFlood`
+(after the user approved macOS UI automation): avg CPU **34 % → 29 %** (50 Hz phase 34 → 26 %, STATUSTEXT flood 34 → 32 %),
+RSS flat (322 → 321 MB; before +24 MB). Target < 15 % not reached: the remaining cost is re-rendering the whole view tree per
+batch (next step: split VehicleModel into smaller ObservableObjects so the map/status don't redraw with the HUD).
 
 Verified after these: unit 67/67, fake drone 86/86, SITL `sitl_log_download` + `sitl_arm` 2/2.
