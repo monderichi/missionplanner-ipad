@@ -616,6 +616,24 @@ simulator for the UI part.
   accessibility elements (also needed for TEST-031).
 - **Accept** `test_a11y_audit` reports < 10 issues, none on the top bar.
 
+### BUG-038: ManualControl turns a NaN stick value into full deflection
+- **Severity** Low · **Category** safety (hardening) · **Verdict** CONFIRMED headless (`manual_control_rover.sh`, `manual_control_sub.sh`)
+- **Actual** `frame.y=1000 for NaN input`: `ManualControl.scaled` clamps with `max(-1, min(1, NaN))`, which Swift evaluates to
+  `1.0`. The on-screen sticks can't produce NaN (their drag math divides by a constant) and gamepad axes are finite, so this is
+  hardening for a control path that moves a vehicle.
+- **Cause** `App/Control/ManualControl.swift` `shape(_:)`/`scaled(_:)`.
+- **Fix** `guard v.isFinite else { return 0 }` in `shape`; treat non-finite as centre.
+- **Accept** both scenarios PASS.
+
+### BUG-039: ADS-B traffic is accepted without a coordinate check or a count limit
+- **Severity** Low · **Category** robustness, performance · **Verdict** CONFIRMED (code + UI: lat 200/lon 210 is stored; no crash)
+- **Repro** `testing/sim/catalyst.sh uitest BreakTestUITests2/test_Z7_adsbOutOfRangeCoordinate` (no crash: MapKit tolerates an
+  invalid annotation coordinate); flood: `BreakTestUITests2/test_perf_adsbFlood` (200 new aircraft/s; not measured yet).
+- **Cause** `App/Vehicle/VehicleModel.swift:292-303` stores any ADSB_VEHICLE with `lat != 0 || lon != 0`, from any sysid, with
+  only a 60 s expiry; `MapCanvas.syncTraffic` re-walks every aircraft on every update.
+- **Fix** Accept only |lat| ≤ 90, |lon| ≤ 180; cap at ~300 aircraft (drop the farthest/oldest); throttle map sync to 2 Hz.
+- **Accept** a harness test with 10 000 unique ICAO keeps `traffic.count` ≤ 300 and rejects lat 200.
+
 ### TEST-030: The app layer has no tests, CI runs only MAVLinkKit, and there are no UI tests
 - **Severity** Medium · **Category** test gap
 - **Details** `LinkManager`, `VehicleModel`, the stores and every view are untested. All bugs above except BUG-002/-007/-010/
@@ -792,3 +810,24 @@ Status: PASS, FAIL (→ action item), PARTIAL (logic tested, UI not), NOT TESTED
   E1 (sheet only), a11y collection, dark mode (light mode could not be forced); FAIL/CRASH confirming BUG-006/-011 (fly-here −5 m), BUG-007 (editor crash),
   BUG-018 (no confirmation); new BUG-035 (165 accessibility issues), BUG-036 (locale-grouped PWM "1.500"), BUG-037 (48 % CPU
   at 50 Hz, memory growth). B4 in the UI not automatable on Mac (list scrolling).
+
+---
+
+## 8. Re-test after pulling origin/main (12 upstream commits, merged as 467f9ea on 2026-11-28)
+
+Upstream added rover/sub support, gamepad/on-screen MANUAL_CONTROL, a graph, MAVLink inspector, ADS-B, gimbal, DataFlash
+review and several setup pages. Re-test results:
+
+| Area | Result |
+|---|---|
+| Reported bugs BUG-001…037 | **All still present** (every cause line unchanged; full re-run 105 runs: 65 PASS / 24 FAIL / 16 CRASH, same set as before) |
+| Unit tests | 51 (incl. 9 new DataFlash tests): all upstream tests pass; the 4 regression tests still fail as intended |
+| Harness | builds after adding a UIKit stand-in (`testing/harness/UIKitShim`): `PlannerSettings.swift` (model layer) now imports UIKit |
+| ManualControl (new) | opt-in, ~10 Hz frames, off on link loss / app backgrounding, stays off until re-enabled, refused on copters: PASS. NaN → full deflection: BUG-038 |
+| ArduRover / ArduSub SITL (new) | `sitl_rover_manual`, `sitl_sub_manual`: the vehicle drives under MANUAL_CONTROL (rover 10 m, ROV 5.5 m in 8 s); params 1256 / 1399 |
+| DataFlash parser (new) | `probe_dataflash_fuzz`: 20 000 mutated/random .bin inputs, no trap |
+| TelemetryHistory / MessageInspector (new) | bounded (120 s / 5 s windows) by code review |
+| ADS-B (new) | no crash with out-of-range positions; no validation or cap: BUG-039 |
+| TESTING_SIMULATOR.md UI (Mac Catalyst) | S-C6 measure, S-C12 graph, S-C13 inspector, S-C15 DataFlash review, S-C16/S-R2/S-S7 every setup page for copter/rover/sub (no crash), S-R5 rover Control tab, S-S5 leak banner: PASS. S-G2: test could not reach the row (list scrolling), not a bug |
+| Long UI session (30 min, normal rates) | avg 30 % CPU; RSS 327 → 383 MB in 15 min then flat (378–388 MB): warm-up, no steady leak (CPU → BUG-037) |
+| Mission upload on lossy SITL | BUG-033 is intermittent: 4/5 failed in earlier runs, 1/3 in this run |
