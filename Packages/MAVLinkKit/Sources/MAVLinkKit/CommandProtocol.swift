@@ -37,9 +37,6 @@ public final class CommandSession {
         /// BUG-002: ACKs before this time may belong to the command this one superseded (COMMAND_ACK has no request id):
         /// they don't resolve it. It is confirmed by a later ACK, or by vehicle state (`confirmByState`).
         var ambiguousUntil: TimeInterval = -.infinity
-        /// review 4: released from the queue after its predecessor was resent: a duplicate ACK of the predecessor may
-        /// still be on the way, so its first send gets a short ambiguity window.
-        var afterResend = false
     }
     private var pending: [UInt16: Pending] = [:]
     /// BUG-002 (review 1): commands whose param1 selects *what* is addressed (servo channel, relay, motor, message id)
@@ -94,17 +91,17 @@ public final class CommandSession {
         // could otherwise "confirm" a lost DISARM.
         guard let p = pending[command], p.attempts > 0, now >= p.ambiguousUntil else { return [] }
         pending[command] = nil
-        releaseQueued(command, previousResent: p.attempts > 1)
+        releaseQueued(command)
         return [.accepted(command: command)]
     }
 
     /// The earlier command with this id is resolved: the next queued one goes out on the next tick
     /// (attempts 0, lastSent far in the past) and is then retried on its own.
-    private func releaseQueued(_ command: UInt16, previousResent: Bool) {
+    private func releaseQueued(_ command: UInt16) {
         guard var q = queued[command], !q.isEmpty else { return }
         let next = q.removeFirst()
         queued[command] = q.isEmpty ? nil : q
-        pending[command] = Pending(message: next, attempts: 0, lastSent: -.infinity, afterResend: previousResent)
+        pending[command] = Pending(message: next, attempts: 0, lastSent: -.infinity)
     }
 
     // Convenience builders for the commands the app uses.
@@ -132,14 +129,14 @@ public final class CommandSession {
         switch ack.result {
         case MAVResult.accepted.rawValue:
             pending[ack.command] = nil
-            releaseQueued(ack.command, previousResent: p.attempts > 1)
+            releaseQueued(ack.command)
             return [.accepted(command: ack.command)]
         case MAVResult.inProgress.rawValue:
             pending[ack.command]?.lastSent = now // keep waiting, don't resend
             return [.inProgress(command: ack.command, progress: ack.progress)]
         default:
             pending[ack.command] = nil
-            releaseQueued(ack.command, previousResent: p.attempts > 1)
+            releaseQueued(ack.command)
             return [.rejected(command: ack.command, result: ack.result)]
         }
     }
@@ -152,12 +149,12 @@ public final class CommandSession {
             if p.attempts >= config.attempts {
                 pending[cmd] = nil
                 events.append(.timedOut(command: cmd))
-                releaseQueued(cmd, previousResent: true) // late ACKs of the timed-out one may still arrive
+                releaseQueued(cmd)
             } else {
-                // review 3: no ambiguity window for a released queued command on a clean link: ignoring its own fast ACK
-                // made every one be sent twice (a repeated motor test / camera trigger). review 4: but if its predecessor
-                // was resent, a duplicate ACK of the predecessor may follow: ignore ACKs briefly after the first send.
-                if p.attempts == 0 && p.afterResend { p.ambiguousUntil = now + min(0.5, config.timeout / 3) }
+                // review 3/5: no ambiguity window for a released queued command: ignoring its own fast ACK made it be sent
+                // twice, and (review 5) a window after a resend cascaded down the whole queue (every later motor test /
+                // photo twice). Only the unsent case is guarded (`handle`, attempts == 0). Limit: COMMAND_ACK has no
+                // request id, so a duplicate ACK of the previous command arriving after this one went out still resolves it.
                 p.attempts += 1
                 p.lastSent = now
                 p.message.confirmation = UInt8(min(255, max(0, p.attempts - 1))) // MAVLink: increment on resend

@@ -82,12 +82,39 @@ final class BreakTestRegressionTests: XCTestCase {
         for t in [1.6, 1.6] { let ch = s.inFlight(183)?.param1; note(s.handle(ack(183), now: t), ch) } // original + duplicate
         XCTAssertEqual(accepted, [5], "duplicate ACK of servo 5 accepted servo 6 before it was sent")
         sent += s.tick(now: 1.75).messages.compactMap { ($0 as? MAV.CommandLong)?.param1 } // servo 6 first send
-        do { let ch = s.inFlight(183)?.param1; note(s.handle(ack(183), now: 1.8), ch) } // a late third copy for servo 5: still ambiguous
-        XCTAssertEqual(accepted, [5])
         do { let ch = s.inFlight(183)?.param1; note(s.handle(ack(183), now: 2.4), ch) } // servo 6's own ACK
         XCTAssertEqual(sent, [5, 5, 6])
         XCTAssertEqual(accepted, [5, 6])
         XCTAssertTrue(s.pendingCommands.isEmpty)
+    }
+
+    /// Review 5: after one lost ACK (servo 5 resent) and after a timeout, the rest of the queue goes out once each on a
+    /// clean link (0.2 s round trip): no cascade of double sends.
+    func test_BUG002_queueRecoversAfterLostAckAndTimeout() {
+        for timeoutFirst in [false, true] {
+            let s = CommandSession(targetSystem: 1) // timeout 1.5 s, 3 attempts
+            var sent: [Float] = []
+            var acks: [(at: Double, ch: Float)] = [] // ACK due at time `at` for a send of channel `ch`
+            var lostFirst = true
+            func out(_ m: [MAVLinkMessage], _ t: Double) {
+                for c in m.compactMap({ $0 as? MAV.CommandLong }) {
+                    sent.append(c.param1)
+                    // servo 5: first ACK lost (or, with timeoutFirst, every ACK lost so it times out)
+                    if c.param1 == 5 && (timeoutFirst || lostFirst) { lostFirst = false; continue }
+                    acks.append((t + 0.2, c.param1))
+                }
+            }
+            for ch in [Float(5), 6, 7, 8] { out(s.send(183, params: [ch, 1900], now: 0), 0) }
+            var t = 0.0
+            while t < 20, !s.pendingCommands.isEmpty {
+                t += 0.25
+                for a in acks where a.at <= t { _ = s.handle(ack(183), now: t) }
+                acks.removeAll { $0.at <= t }
+                out(s.tick(now: t).messages, t)
+            }
+            XCTAssertTrue(s.pendingCommands.isEmpty, "stuck: \(s.pendingCommands)")
+            XCTAssertEqual(sent.filter { $0 != 5 }, [6, 7, 8], "timeoutFirst=\(timeoutFirst): \(sent)")
+        }
     }
 
     /// BUG-002: emergency force-disarm is never queued.

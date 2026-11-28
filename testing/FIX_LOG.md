@@ -94,3 +94,10 @@ Code comments at each change are tagged `// BUG-0xx:`.
 |---|---|---|
 | 1 | A queued command released after its predecessor's ACK is not resolved by an ACK before it has been sent (`attempts == 0`): that ACK can only be a duplicate for the predecessor. If the predecessor was resent, the released command's first send gets a short window (`min(0.5 s, timeout/3)`) for late duplicates. On a clean link each command still goes out once. | `test_BUG002_duplicateAckDoesNotAcceptUnsentQueuedCommand`, `test_BUG002_servoTapsAreNotDropped` |
 | opt. | One-item rally upload verified (`testSingleRallyPointMoveIsVerified`). The simulated mission vehicle's RNG is seeded (SplitMix64), so the 200-run lossy test is repeatable. With `LOSSY_RUNS=3000` about 1 run in 3000 ends in "No answer from vehicle": 16 tries in a row for one item lost at 30 % each way (0.51^16), which is the dead-link limit working as designed. | unit 63/63, fake drone 86/86, SITL subset 4/4 |
+
+## Review 5 (testing/REVIEW_5.md): required change applied
+
+| # | Change | Proof |
+|---|---|---|
+| 1 | The short ACK window after a resent predecessor (added for review 4) is removed. It cascaded: the next command's own fast ACK was ignored, so it was resent, which marked the following one as "after a resend", and so on (every later motor test or photo went out twice). Only the review-4 guard stays: an ACK can't resolve a queued command that hasn't been sent yet. Known limit, documented in the code: COMMAND_ACK has no request id, so a late duplicate ACK of the previous command can still resolve the next one once it is sent. | `test_BUG002_queueRecoversAfterLostAckAndTimeout` (6, 7, 8 go out once each after a lost ACK and after a timeout), `test_BUG002_duplicateAckDoesNotAcceptUnsentQueuedCommand` |
+| CI | The user has no GitHub Actions minutes left. The `break-test` job now runs only on a manual workflow run, and pushes from here on carry `[skip ci]`. All checks run locally. | unit 64/64, fake drone 86/86, SITL subset 3/3 |

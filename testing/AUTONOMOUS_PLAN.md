@@ -120,3 +120,6 @@ The user's original request is kept verbatim at the end; the version below is th
 - 08:55 CI green after 8931fcb (90 s reconnect param wait; ':' removed from log names). Review 4: CHANGES REQUIRED (1: a duplicate
   ACK could accept a released, still-unsent queued command). Fixed + seeded the lossy mission sim. Unit 63/63, fake drone 86/86,
   SITL subset 4/4. Next: review 5.
+- 09:15 User: no GitHub Actions minutes. Cancelled the running CI; `break-test` job made manual-only; pushes now use `[skip ci]`
+  and verification is local only. Review 5: CHANGES REQUIRED (1: the post-resend ACK window cascaded double sends down the
+  queue). Window removed, unsent guard kept, test added. Unit 64/64, fake drone 86/86, SITL subset 3/3. Next: review 6.

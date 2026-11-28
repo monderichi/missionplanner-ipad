@@ -45,6 +45,8 @@ jobs:
   # TEST-030: the app layer (LinkManager, VehicleModel, stores) against the scriptable fake drone, headless,
   # plus the crash probes and fuzzers. Fails on any FAIL/CRASH. See testing/README.md.
   break-test:
+    # Manual runs only (Actions → Run workflow): macOS minutes are limited. Locally: testing/scenarios/run.py -j 4 ci
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-15
     timeout-minutes: 40
     steps:
