@@ -142,6 +142,7 @@ struct ConnectView: View {
                         if link.state.isActive { guarded("Reconnect", go) } else { go() }
                     }
                     .disabled(portError != nil || (kind == .ble && UUID(uuidString: bleIDText) == nil)) // BUG-024
+                    .accessibilityIdentifier("connect.button") // TEST-031
                     if let e = portError { Text(e).font(.caption).foregroundColor(.red) }
                 }
 

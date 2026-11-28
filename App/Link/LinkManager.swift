@@ -376,7 +376,11 @@ final class LinkManager: ObservableObject {
             self.uiBatch = []
             self.uiFlushScheduled = false
             guard gen == self.ioGeneration, !batch.isEmpty else { return }
-            DispatchQueue.main.async { self.apply(batch) }
+            DispatchQueue.main.async {
+                // a batch queued just before Disconnect/Reconnect must not re-populate the reset model (BUG-012/-037)
+                guard gen == self.connectGeneration else { return }
+                self.apply(batch)
+            }
         }
     }
 

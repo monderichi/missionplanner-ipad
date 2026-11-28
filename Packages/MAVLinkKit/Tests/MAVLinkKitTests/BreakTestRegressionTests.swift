@@ -1,6 +1,5 @@
-// Added by the break-test (see TESTING_RESULTS.md). Plain XCTest, so these files can be moved into
-// Packages/MAVLinkKit/Tests/MAVLinkKitTests/ unchanged. Tests named test_BUG_xxx FAIL on c14c3e1 and
-// must pass once that bug is fixed; test_cov_* cover thin areas and pass today.
+// Regression tests from the break-test (TESTING_RESULTS.md, testing/FIX_LOG.md): test_BUG0xx_* failed on c14c3e1 and
+// pass with the fixes on bug_fixes; test_cov_* cover thin areas. Also run on CI by `swift test`.
 import XCTest
 @testable import MAVLinkKit
 

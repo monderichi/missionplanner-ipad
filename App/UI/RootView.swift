@@ -130,9 +130,10 @@ struct StatusBar: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 Text(link.state.description).font(.caption).lineLimit(1)
+                    .accessibilityIdentifier("status.link") // TEST-031
                 Text(vehicle.heartbeatAlive ? "\(vehicle.vehicleTypeName) · sys \(vehicle.systemID.map { "\($0)" } ?? "?")"
                                             : (link.state.isActive ? "Waiting for heartbeat…" : " "))
-                    .font(.caption2).foregroundColor(.secondary)
+                    .font(.caption2).foregroundColor(.primary.opacity(0.85)) // BUG-035: contrast
             }
             .frame(width: 220, alignment: .leading)
 
@@ -188,7 +189,7 @@ struct StatusBar: View {
 
     private func item(_ title: String, _ value: String, color: Color = .primary) -> some View {
         VStack(spacing: 0) {
-            Text(title).font(.caption2).foregroundColor(.secondary)
+            Text(title).font(.caption2).foregroundColor(.primary.opacity(0.85)) // BUG-035: contrast
             Text(value).font(.subheadline.weight(.semibold)).foregroundColor(color).lineLimit(1)
         }
     }

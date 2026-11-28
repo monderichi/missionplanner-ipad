@@ -77,6 +77,7 @@ struct ActionsView: View {
                     Button { confirmArm = true } label: {
                         Label("Arm", systemImage: "bolt.fill").frame(maxWidth: .infinity)
                     }
+                    .accessibilityIdentifier("actions.arm") // TEST-031
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
                     .disabled(!ready || vehicle.armed)
@@ -84,6 +85,7 @@ struct ActionsView: View {
                     Button { confirmDisarm = true } label: {
                         Label("Disarm", systemImage: "bolt.slash.fill").frame(maxWidth: .infinity)
                     }
+                    .accessibilityIdentifier("actions.disarm") // TEST-031
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
                     .disabled(!ready || !vehicle.armed)

@@ -53,3 +53,7 @@ Code comments at each change are tagged `// BUG-0xx:`.
 | BUG-039 | ADS-B: only valid positions, at most 300 aircraft. | code + UI `test_Z7_…` |
 | BUG-033 (SITL) | Re-run against ArduCopter 4.7.3 SITL at 30 %/30 %/15 % loss: 3/3 uploads succeed (were 4/5 failing). | `sitl_lossy*.sh` PASS |
 | BUG-034 | New `tools/gen_param_meta_ardupilot.py` converts ArduPilot's own `apm.pdef.json` (generated from the Copter-4.7.3 source with `param_parse.py`) into the app's metadata JSON for Copter/Rover/Sub/Plane/Tracker. Coverage of a 4.7.3 SITL dump: 99.9 % (was 57.9 %). TESTING.md C3 and README now say `MAV6_` (4.7+) / `SR6_` (older). | `testing/tools/param_meta_coverage.py` |
+| BUG-035 | Setup rows, Map and File menus get accessibility labels (SF Symbol names were read aloud); top-bar captions use primary colour (contrast). Partial: the remaining contrast findings are on system-styled controls. | UI `test_a11y_audit` |
+| TEST-030 | Regression tests moved into `Packages/MAVLinkKit/Tests` (run by CI's `swift test`); new CI job `break-test` builds the headless harness and runs `run.py -j 3 ci` (all fake-drone scenarios + probes). | CI |
+| TEST-031 | Identifiers: `connect.button`, `status.link`, `actions.arm`, `actions.disarm`, `plan.file`, `map.menu`, `setup.<page>`, `banner.noHeartbeat`, `banner.noAttitude`, `banner.warning`. | UI tests |
+| (regression) | Batched UI updates could re-populate the model after Disconnect: the main-queue apply now checks the connection generation. | `stale_after_disconnect.sh` ×3 PASS |

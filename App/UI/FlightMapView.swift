@@ -176,6 +176,8 @@ struct MapToolsMenu: View {
                     .padding(8)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
             }
+            .accessibilityLabel("Map source and offline maps") // BUG-035
+            .accessibilityIdentifier("map.menu") // TEST-031
             if let d = offline.progress {
                 HStack {
                     ProgressView(value: Double(d.done), total: Double(max(d.total, 1))).frame(width: 120)

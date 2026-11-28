@@ -44,6 +44,24 @@ jobs:
 
   # Runs the real app in the iPad Simulator against tools/fake_vehicle.py and publishes screenshots
   # to the ci-screenshots branch. Only on manual runs or commits whose message contains [sim].
+  # TEST-030: the app layer (LinkManager, VehicleModel, stores) against the scriptable fake drone, headless,
+  # plus the crash probes and fuzzers. Fails on any FAIL/CRASH. See testing/README.md.
+  break-test:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build headless harness (app Link/Vehicle/Storage sources + driver)
+        run: testing/harness/build_harness.sh
+      - name: Scenarios + probes against the fake drone (no SITL)
+        run: python3 testing/scenarios/run.py -j 3 ci
+      - name: Upload scenario logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: break-test-logs
+          path: testing/logs/
+
   simulator:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[sim]')
     runs-on: macos-15

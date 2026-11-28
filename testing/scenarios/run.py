@@ -100,9 +100,9 @@ S = {
     "fence_breach": dict(drone=TCP),
     "motor_test": dict(drone=TCP),
     "mission_no_space": dict(drone=TCP + ["--fault", "mission_no_space"], harness=H_TCP + ["--expect", "no space"], name="mission_edge"),
-    "mission_oob": dict(drone=TCP + ["--fault", "mission_oob"], name="mission_edge"),
+    "mission_oob": dict(drone=TCP + ["--fault", "mission_oob"], harness=H_TCP + ["--expect", "vehicle asked for item"], name="mission_edge"),
     "param_16char": dict(drone=TCP + ["--fault", "param_16char"], harness=H_TCP + ["--name", "ABCDEFGHIJKLMNOP"], name="param_edge"),
-    "param_count_change": dict(drone=TCP + ["--fault", "param_count_change"], name="param_edge"),
+    "param_count_change": dict(drone=TCP + ["--fault", "param_count_change"], harness=H_TCP + ["--expect", "incomplete"], name="param_edge"),
     "manual_control_rover": dict(drone=TCP + ["--vehicle-type", "10"], name="manual_control"),
     "manual_control_sub": dict(drone=TCP + ["--vehicle-type", "12"], name="manual_control"),
     "manual_control_copter": dict(drone=TCP, harness=H_TCP + ["--expect", "unsupported"], name="manual_control"),
@@ -278,6 +278,8 @@ def main():
         args = PROBES
     elif args == ["sitl"]:
         args = [k for k in S if S[k].get("sitl")]
+    elif args == ["ci"]:  # GitHub Actions: fake drone + probes, no SITL / long runs
+        args = [k for k in S if not S[k].get("long") and not S[k].get("sitl")]
     elif args == ["everything"]:
         args = [k for k in S if k not in ("long_session",)]
     hb = harness_bin()

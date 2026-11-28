@@ -187,6 +187,8 @@ struct PlanView: View {
                     } label: { Label("Save .waypoints", systemImage: "square.and.arrow.down") }
                         .disabled(mission.mission.count < 2)
                 } label: { Label("File", systemImage: "doc") }
+                .accessibilityLabel("File") // BUG-035
+                .accessibilityIdentifier("plan.file") // TEST-031
             }
             Button(role: .destructive) { confirmClear = true } label: { Label("Clear", systemImage: "trash") }
         }

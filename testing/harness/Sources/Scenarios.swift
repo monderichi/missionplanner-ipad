@@ -807,6 +807,13 @@ enum Scenarios {
 
     static func paramEdge(_ c: Ctx) {
         guard c.connectAndWaitForVehicle() else { return }
+        if c.args.extra["expect"] == "incomplete" {
+            // the vehicle reports a total it never delivers: the app must end with a clear "missing" message
+            let t = c.waitUntil(60) { if case .failed = c.link.params.downloadState { return true } else { return false } }
+            c.check("inconsistent count ends with a 'missing, Refresh' message", t != nil && (c.link.params.banner ?? "").contains("missing"),
+                    "state=\(c.link.params.downloadState) banner=\(c.link.params.banner ?? "nil")")
+            return
+        }
         c.waitParams(timeout: 40)
         let n = c.link.params.params.count
         c.note("count=\(n) state=\(c.link.params.downloadState) banner=\(c.link.params.banner ?? "nil")")

@@ -176,6 +176,8 @@ struct SetupView: View {
                     } label: {
                         Label(p.rawValue, systemImage: p.icon).fontWeight(page == p ? .bold : .regular)
                     }
+                    .accessibilityLabel(p.rawValue) // BUG-035: the SF Symbol name ("battery.75") was read aloud
+                    .accessibilityIdentifier("setup.\(p.rawValue)") // TEST-031
                     .listRowBackground(page == p ? Color.accentColor.opacity(0.15) : Color.clear)
                 }
             }
