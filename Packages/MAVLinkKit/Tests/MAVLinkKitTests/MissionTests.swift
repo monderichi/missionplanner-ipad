@@ -6,6 +6,10 @@ final class SimulatedMissionVehicle {
     var stored: [UInt8: [MissionItem]] = [0: [], 1: [], 2: []]
     var dropRate: Double
     var useLegacyRequest = false
+    /// BUG-033: behave like ArduPilot 4.7.3 (seen in SITL): a duplicate/out-of-order item during an upload gets
+    /// MISSION_ACK INVALID_SEQUENCE (13) plus a re-request, and a re-sent final item after completion gets ERROR (1)
+    /// instead of a second ACCEPTED.
+    var arduPilotLike = false
     private var uploading: (type: UInt8, count: Int, items: [Int: MissionItem])?
     /// Last finished upload: a re-sent final item (our ACK was lost) is ACKed again.
     private var lastCompleted: (type: UInt8, count: Int)?
@@ -37,6 +41,10 @@ final class SimulatedMissionVehicle {
                     } else {
                         out.append(request(0, c.missionType))
                     }
+                } else if arduPilotLike, let m = p.decode(MAV.MissionItemInt.self), let u = uploading, m.missionType == u.type,
+                          let want = (0..<u.count).first(where: { u.items[$0] == nil }), Int(m.seq) != want {
+                    out.append(MAV.MissionAck(targetSystem: 255, targetComponent: 190, type: 13, missionType: u.type))
+                    out.append(request(want, u.type))
                 } else if let m = p.decode(MAV.MissionItemInt.self), var u = uploading, m.missionType == u.type {
                     u.items[Int(m.seq)] = MissionItem(m)
                     uploading = u
@@ -50,7 +58,8 @@ final class SimulatedMissionVehicle {
                     }
                 } else if let m = p.decode(MAV.MissionItemInt.self), uploading == nil, let done = lastCompleted,
                           m.missionType == done.type, Int(m.seq) == done.count - 1 {
-                    out.append(MAV.MissionAck(targetSystem: 255, targetComponent: 190, type: 0, missionType: done.type))
+                    out.append(MAV.MissionAck(targetSystem: 255, targetComponent: 190, type: arduPilotLike ? 1 : 0,
+                                              missionType: done.type))
                 }
             }
         }
@@ -106,6 +115,22 @@ final class MissionTests: XCTestCase {
         }
         items.append(MissionItem(command: MissionCmd.returnToLaunch))
         return items
+    }
+
+    /// BUG-033: uploads to an ArduPilot-like vehicle at 30 % loss each way must all end "uploaded" (verified by read-back
+    /// when the final ACK is lost), never "Invalid sequence" / "Error".
+    func testUploadToArduPilotLikeVehicleSurvivesLoss() {
+        var failures: [String] = []
+        for attempt in 0..<60 {
+            let v = SimulatedMissionVehicle(dropRate: 0.3)
+            v.arduPilotLike = true
+            let s = MissionSession(targetSystem: 1, config: .narrowLink)
+            let items = sampleMission(13)
+            let up = run(s, v, start: s.startUpload(.mission, items: items, now: 0))
+            if !up.contains(.uploaded(type: .mission, count: items.count)) { failures.append("run \(attempt): \(up.suffix(1))") }
+            else if v.stored[0]?.count != items.count { failures.append("run \(attempt): stored \(v.stored[0]?.count ?? -1)") }
+        }
+        XCTAssertTrue(failures.count <= 3, "\(failures.count)/60 failed: \(failures.prefix(3))")
     }
 
     func testUploadThenDownloadRoundTripsThroughLossyLink() {

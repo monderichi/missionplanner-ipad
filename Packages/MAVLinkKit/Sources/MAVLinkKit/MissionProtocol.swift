@@ -86,23 +86,36 @@ public struct MissionItem: Equatable {
         self.param2 = param2
         self.param3 = param3
         self.param4 = param4
-        self.x = Int32((latitude * 1e7).rounded())
-        self.y = Int32((longitude * 1e7).rounded())
+        self.x = Self.e7(latitude)   // BUG-007: never trap on NaN/out-of-range input
+        self.y = Self.e7(longitude)
         self.z = altitude
         self.missionType = missionType.rawValue
     }
 
     public var latitude: Double {
         get { Double(x) / 1e7 }
-        set { x = Int32((newValue * 1e7).rounded()) }
+        set { x = Self.e7(newValue) } // BUG-007
     }
 
     public var longitude: Double {
         get { Double(y) / 1e7 }
-        set { y = Int32((newValue * 1e7).rounded()) }
+        set { y = Self.e7(newValue) } // BUG-007
     }
 
     public var hasLocation: Bool { MissionCmd.hasLocation(command) && (x != 0 || y != 0) }
+
+    /// BUG-007: degrees → 1e7 integer without trapping. Non-finite → 0, out-of-range values clamp to Int32.
+    /// Callers that accept user/file input validate the range first (`isValidCoordinate`).
+    public static func e7(_ degrees: Double) -> Int32 {
+        guard degrees.isFinite else { return 0 }
+        let v = (degrees * 1e7).rounded()
+        return Int32(max(Double(Int32.min), min(Double(Int32.max), v)))
+    }
+
+    /// Latitude/longitude a vehicle can fly to.
+    public static func isValidCoordinate(latitude: Double, longitude: Double) -> Bool {
+        latitude.isFinite && longitude.isFinite && abs(latitude) <= 90 && abs(longitude) <= 180
+    }
 
     public init(_ m: MAV.MissionItemInt) {
         seq = m.seq; frame = m.frame; command = m.command; current = m.current; autocontinue = m.autocontinue
@@ -114,7 +127,14 @@ public struct MissionItem: Equatable {
     public init(_ m: MAV.MissionItem) {
         seq = m.seq; frame = m.frame; command = m.command; current = m.current; autocontinue = m.autocontinue
         param1 = m.param1; param2 = m.param2; param3 = m.param3; param4 = m.param4
-        x = Int32((Double(m.x) * 1e7).rounded()); y = Int32((Double(m.y) * 1e7).rounded()); z = m.z
+        // BUG-007: only location commands carry degrees in x/y; for the others x/y are param5/param6 (raw values).
+        if MissionCmd.hasLocation(m.command) {
+            x = Self.e7(Double(m.x)); y = Self.e7(Double(m.y))
+        } else {
+            x = Int32(max(Double(Int32.min), min(Double(Int32.max), Double(m.x.isFinite ? m.x : 0).rounded())))
+            y = Int32(max(Double(Int32.min), min(Double(Int32.max), Double(m.y.isFinite ? m.y : 0).rounded())))
+        }
+        z = m.z
         missionType = m.missionType
     }
 
@@ -168,6 +188,8 @@ public final class MissionSession {
         case downloadWaitCount(MissionType)
         case downloadItems(MissionType, count: Int, next: Int, items: [MissionItem])
         case upload(MissionType, items: [MissionItem], lastRequested: Int?)
+        /// BUG-033: the final ACK may have been lost; read MISSION_COUNT back to confirm the upload.
+        case uploadVerify(MissionType, count: Int)
     }
 
     public let targetSystem: UInt8
@@ -270,7 +292,7 @@ public final class MissionSession {
             op = .downloadItems(type, count: count, next: next + 1, items: items)
             return ([requestItem(type, next + 1)], [.progress(type: type, done: items.count, total: count)])
 
-        case .upload(let type, let items, _):
+        case .upload(let type, let items, let lastRequested):
             var requested: Int?
             if let r = packet.decode(MAV.MissionRequestInt.self), r.missionType == type.rawValue { requested = Int(r.seq) }
             else if let r = packet.decode(MAV.MissionRequest.self), r.missionType == type.rawValue { requested = Int(r.seq) }
@@ -286,12 +308,41 @@ public final class MissionSession {
                         [.progress(type: type, done: seq + 1, total: items.count)])
             }
             if let a = packet.decode(MAV.MissionAck.self), a.missionType == type.rawValue {
+                if a.type == 0 {
+                    op = .idle
+                    return ([], [.uploaded(type: type, count: items.count)])
+                }
+                // BUG-033: ArduPilot answers a duplicate (resent) item with INVALID_SEQUENCE but keeps the upload open
+                // and re-requests the item it wants. Not an error: keep waiting.
+                if a.type == 13 {
+                    lastActivity = now
+                    return ([], [])
+                }
+                // BUG-033: after the last item, ERROR usually means our resend reached a vehicle that had already
+                // stored everything (its ACCEPTED was lost; ArduPilot does not re-ACK). Verify by reading the count.
+                if a.type == 1, lastRequested == items.count - 1 {
+                    return startVerify(type, count: items.count, now: now)
+                }
                 op = .idle
-                if a.type == 0 { return ([], [.uploaded(type: type, count: items.count)]) }
                 return ([], [.failed(type: type, reason: MAVMissionResult.text(a.type))])
             }
             return ([], [])
+
+        case .uploadVerify(let type, let count):
+            guard let c = packet.decode(MAV.MissionCount.self), c.missionType == type.rawValue else { return ([], []) }
+            op = .idle
+            // End the vehicle's download transfer politely, then report.
+            if Int(c.count) == count { return ([ack(type)], [.uploaded(type: type, count: count)]) }
+            return ([ack(type)], [.failed(type: type, reason: "Not confirmed: vehicle has \(c.count) items, expected \(count)")])
         }
+    }
+
+    /// BUG-033: confirm an upload whose final ACK may be lost by asking for the vehicle's item count.
+    private func startVerify(_ type: MissionType, count: Int, now: TimeInterval) -> (messages: [MAVLinkMessage], events: [Event]) {
+        op = .uploadVerify(type, count: count)
+        lastActivity = now
+        attempts = 0
+        return ([MAV.MissionRequestList(targetSystem: targetSystem, targetComponent: targetComponent, missionType: type.rawValue)], [])
     }
 
     // MARK: timeouts
@@ -313,11 +364,18 @@ public final class MissionSession {
             resend = requestItem(t, next)
         case .upload(let t, let items, let lastRequested):
             type = t
+            // BUG-033: retries for the last item ran out: the vehicle may have stored it and lost our ACK. Verify.
+            if attempts > config.retries, lastRequested == items.count - 1 {
+                return startVerify(t, count: items.count, now: now)
+            }
             if let seq = lastRequested {
                 resend = items[seq].message(targetSystem: targetSystem, targetComponent: targetComponent)
             } else {
                 resend = countMessage(t, items.count)
             }
+        case .uploadVerify(let t, _):
+            type = t
+            resend = MAV.MissionRequestList(targetSystem: targetSystem, targetComponent: targetComponent, missionType: t.rawValue)
         }
         if attempts > config.retries {
             op = .idle
@@ -354,7 +412,12 @@ public enum WaypointFile {
     public enum ParseError: Error, Equatable {
         case notWaypointFile
         case badLine(Int)
+        /// BUG-010: more items than the mission protocol (UInt16 seq) or any autopilot can hold.
+        case tooManyItems(Int)
     }
+
+    /// BUG-010: upper bound accepted from files (MAVLink seq is UInt16; ArduPilot boards hold a few thousand at most).
+    public static let maxItems = 10_000
 
     public static func parse(_ text: String) throws -> [MissionItem] {
         let lines = text.split(whereSeparator: { $0.isNewline }).map { $0.trimmingCharacters(in: .whitespaces) }
@@ -369,6 +432,12 @@ public enum WaypointFile {
                   let lat = Double(c[8]), let lon = Double(c[9]), let alt = Float(c[10]), let ac = UInt8(c[11]) else {
                 throw ParseError.badLine(n + 2)
             }
+            // BUG-007: reject non-finite values and impossible positions instead of trapping later.
+            guard p1.isFinite, p2.isFinite, p3.isFinite, p4.isFinite, lat.isFinite, lon.isFinite, alt.isFinite,
+                  !MissionCmd.hasLocation(cmd) || MissionItem.isValidCoordinate(latitude: lat, longitude: lon) else {
+                throw ParseError.badLine(n + 2)
+            }
+            guard out.count < maxItems else { throw ParseError.tooManyItems(lines.count - 1) } // BUG-010
             out.append(MissionItem(seq: UInt16(out.count), frame: frame, command: cmd, current: 0, autocontinue: ac,
                                    param1: p1, param2: p2, param3: p3, param4: p4,
                                    latitude: lat, longitude: lon, altitude: alt))

@@ -301,7 +301,8 @@ public enum ParamFile {
             } else {
                 continue
             }
-            guard let v = Float(valueText), isValidName(name) else { continue }
+            // BUG-020: skip nan/inf (ArduPilot ignores non-finite PARAM_SETs, so they would only time out).
+            guard let v = Float(valueText), v.isFinite, isValidName(name) else { continue }
             out[name] = v
         }
         return out

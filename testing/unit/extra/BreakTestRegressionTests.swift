@@ -21,13 +21,43 @@ final class BreakTestRegressionTests: XCTestCase {
         XCTAssertTrue(!s.pendingCommands.isEmpty || !r.messages.isEmpty, "disarm was silently dropped")
     }
 
-    /// BUG-002 variant: two mode changes in a row, only the first reached the vehicle.
+    /// BUG-002 variant: two mode changes in a row; the ACK of the first must not complete the second, which is then
+    /// sent and tracked (retried) on its own.
     func test_BUG002_secondModeChangeRetriedAfterFirstAck() {
         let s = CommandSession(targetSystem: 1)
         _ = s.setMode(5, now: 0)          // LOITER (delivered)
-        _ = s.setMode(6, now: 0.05)       // RTL (lost on the link)
-        let ev = s.handle(ack(MAVCmd.doSetMode), now: 0.3) // ACK for LOITER
-        XCTAssertNotEqual(ev, [.accepted(command: MAVCmd.doSetMode)], "RTL reported accepted from LOITER's ACK")
+        let second = s.setMode(6, now: 0.05) // RTL: queued behind LOITER (same command id)
+        XCTAssertTrue(second.isEmpty, "RTL must wait until LOITER's ACK so the ACKs can't be confused")
+        _ = s.handle(ack(MAVCmd.doSetMode), now: 0.3) // ACK for LOITER
+        XCTAssertEqual(s.pendingCommands, [MAVCmd.doSetMode], "RTL must still be pending")
+        let r = s.tick(now: 0.35)
+        let sent = r.messages.compactMap { $0 as? MAV.CommandLong }
+        XCTAssertEqual(sent.first?.param2, 6, "RTL must be sent once LOITER is resolved")
+    }
+
+    /// BUG-002: emergency force-disarm is never queued.
+    func test_BUG002_forceDisarmGoesOutImmediately() {
+        let s = CommandSession(targetSystem: 1)
+        _ = s.arm(true, now: 0)
+        XCTAssertEqual(s.arm(false, force: true, now: 0.1).count, 1)
+    }
+
+    /// BUG-016: reordering must not count as loss.
+    func test_BUG016_reorderedPacketsAreNotLoss() {
+        let p = MAVLinkParser()
+        let s = MAVLinkSender(systemID: 1, componentID: 1)
+        var frames: [[UInt8]] = (0..<100).map { _ in s.pack(MAV.Heartbeat(type: 2, autopilot: 3)) }
+        for i in stride(from: 0, to: 98, by: 3) { frames.swapAt(i, i + 1) }
+        for f in frames { _ = p.parse(f) }
+        XCTAssertEqual(p.stats.packetsLost, 0)
+    }
+
+    /// BUG-007: legacy MISSION_ITEM with NaN / huge coordinates must not trap; non-location params are not scaled.
+    func test_BUG007_legacyMissionItemConversionIsSafe() {
+        let bad = MissionItem(MAV.MissionItem(x: .nan, y: 3e10, z: 10, seq: 1, command: MissionCmd.waypoint))
+        XCTAssertEqual(bad.x, 0)
+        let jump = MissionItem(MAV.MissionItem(param1: 3, x: 5, y: 0, seq: 2, command: MissionCmd.doJump))
+        XCTAssertEqual(jump.x, 5)
     }
 
     /// BUG-020: ParamFile.parse accepts nan/inf, which are then offered as writes in Load/Compare.

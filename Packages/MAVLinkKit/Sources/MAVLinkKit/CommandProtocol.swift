@@ -36,6 +36,10 @@ public final class CommandSession {
         var lastSent: TimeInterval
     }
     private var pending: [UInt16: Pending] = [:]
+    /// BUG-002: COMMAND_ACK carries only the command id, so two in-flight commands with the same id can't be told apart
+    /// (an ARM's ACK used to "confirm" a DISARM sent right after it). A second command with the same id therefore waits
+    /// here until the first one is resolved, then goes out (via tick) and is tracked and retried on its own.
+    private var queued: [UInt16: MAV.CommandLong] = [:]
 
     public init(targetSystem: UInt8, targetComponent: UInt8 = 1, config: Config = Config()) {
         self.targetSystem = targetSystem
@@ -43,15 +47,31 @@ public final class CommandSession {
         self.config = config
     }
 
-    public var pendingCommands: [UInt16] { pending.keys.sorted() }
+    public var pendingCommands: [UInt16] { Set(pending.keys).union(queued.keys).sorted() }
 
     public func send(_ command: UInt16, params p: [Float] = [], now: TimeInterval) -> [MAVLinkMessage] {
         let v = p + [Float](repeating: 0, count: max(0, 7 - p.count))
         let msg = MAV.CommandLong(param1: v[0], param2: v[1], param3: v[2], param4: v[3],
                                   param5: v[4], param6: v[5], param7: v[6], command: command,
                                   targetSystem: targetSystem, targetComponent: targetComponent, confirmation: 0)
+        if pending[command] != nil {
+            // BUG-002: emergency force-disarm never waits behind another arm/disarm.
+            let forceDisarm = command == MAVCmd.componentArmDisarm && v[0] == 0 && v[1] == 21196
+            if !forceDisarm {
+                queued[command] = msg // the newest request wins; an older queued one is dropped
+                return []
+            }
+            queued[command] = nil
+        }
         pending[command] = Pending(message: msg, attempts: 1, lastSent: now)
         return [msg]
+    }
+
+    /// BUG-002: the earlier command with this id is resolved: release the queued one. tick() sends it at once
+    /// (attempts 0 and lastSent far in the past) and from then on it is retried like any other command.
+    private func releaseQueued(_ command: UInt16) {
+        guard let next = queued.removeValue(forKey: command) else { return }
+        pending[command] = Pending(message: next, attempts: 0, lastSent: -.infinity)
     }
 
     // Convenience builders for the commands the app uses.
@@ -75,12 +95,14 @@ public final class CommandSession {
         switch ack.result {
         case MAVResult.accepted.rawValue:
             pending[ack.command] = nil
+            releaseQueued(ack.command)
             return [.accepted(command: ack.command)]
         case MAVResult.inProgress.rawValue:
             pending[ack.command]?.lastSent = now // keep waiting, don't resend
             return [.inProgress(command: ack.command, progress: ack.progress)]
         default:
             pending[ack.command] = nil
+            releaseQueued(ack.command)
             return [.rejected(command: ack.command, result: ack.result)]
         }
     }
@@ -93,10 +115,11 @@ public final class CommandSession {
             if p.attempts >= config.attempts {
                 pending[cmd] = nil
                 events.append(.timedOut(command: cmd))
+                releaseQueued(cmd)
             } else {
                 p.attempts += 1
                 p.lastSent = now
-                p.message.confirmation = UInt8(min(255, p.attempts - 1)) // MAVLink: increment on resend
+                p.message.confirmation = UInt8(min(255, max(0, p.attempts - 1))) // MAVLink: increment on resend
                 pending[cmd] = p
                 out.append(p.message)
             }
