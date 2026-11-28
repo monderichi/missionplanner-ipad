@@ -110,3 +110,4 @@ The user's original request is kept verbatim at the end; the version below is th
 - 04:24 Step 8 done: REVIEW_1.md = CHANGES REQUIRED (7). Step 9 done: all 7 + optional items applied. Verified: unit 59/59,
   fake drone 86/86 (after updating the no_ack check: the outcome now comes from the heartbeat), SITL 21/21, UI suite 1 9/9.
   Step 10 next: fresh reviewer → testing/REVIEW_2.md.
+- 04:31 CI: IPA build green; new break-test job failed (CI Swift couldn't type-check the probe dictionary literal). Rewritten entry by entry; probes 20/20 locally; pushed. Review 2 running.

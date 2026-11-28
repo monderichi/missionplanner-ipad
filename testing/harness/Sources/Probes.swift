@@ -11,37 +11,39 @@ import MAVLinkKit
 @inline(never) func opaque<T>(_ x: T) -> T { x }
 
 enum Probes {
-    static let all: [String: (Ctx) -> Void] = [
+    /// Built entry by entry: as one dictionary literal of closures it exceeded the CI compiler's type-check budget.
+    static let all: [String: (Ctx) -> Void] = {
+        var d = [String: (Ctx) -> Void]()
         // real app/MAVLinkKit code
-        "probe:accelcal_nan": { c in accel(c, .nan) },
-        "probe:accelcal_neg": { c in accel(c, -1) },
-        "probe:accelcal_huge": { c in accel(c, 1e10) },
-        "probe:waypoint_file_nan": { c in waypoint(c, lat: "nan") },
-        "probe:waypoint_file_huge_lat": { c in waypoint(c, lat: "1e10") },
-        "probe:waypoint_file_unicode": { c in
+        d["probe:accelcal_nan"] = { (c: Ctx) in accel(c, .nan) }
+        d["probe:accelcal_neg"] = { (c: Ctx) in accel(c, -1) }
+        d["probe:accelcal_huge"] = { (c: Ctx) in accel(c, 1e10) }
+        d["probe:waypoint_file_nan"] = { (c: Ctx) in waypoint(c, lat: "nan") }
+        d["probe:waypoint_file_huge_lat"] = { (c: Ctx) in waypoint(c, lat: "1e10") }
+        d["probe:waypoint_file_unicode"] = { (c: Ctx) in
             let text = "QGC WPL 110\n0\t1\t0\t16\t0\t0\t0\t0\t-35.1\t149.1\t584\t1\n1\t0\t3\t16\t0\t0\t0\t0\t-35,1\t149.1\t50\t1\n"
             do { _ = try WaypointFile.parse(text); c.check("comma-decimal line rejected or parsed", true) }
             catch { c.check("comma-decimal line rejected with an error", true, "\(error)") }
             let emoji = "QGC WPL 110\n0\t1\t0\t16\t0\t0\t0\t0\t🚁\t149.1\t584\t1\n"
             c.check("emoji line rejected", (try? WaypointFile.parse(emoji)) == nil)
-        },
-        "probe:waypoint_file_huge": { c in
+        }
+        d["probe:waypoint_file_huge"] = { (c: Ctx) in
             var s = "QGC WPL 110\n"
             for i in 0..<70_000 { s += "\(i)\t0\t3\t16\t0\t0\t0\t0\t-35.1\t149.1\t50\t1\n" }
             let items = (try? WaypointFile.parse(s)) ?? []
             c.note("parsed \(items.count) items; now MissionStore.setItems (MissionStore.swift:196 UInt16(i))")
             c.link.mission.setItems(.mission, items)
             c.check("70k-line .waypoints loads without crash", true, "\(c.link.mission.mission.count)")
-        },
-        "probe:param_file_nan": { c in
+        }
+        d["probe:param_file_nan"] = { (c: Ctx) in
             let f = ParamFile.parse("FOO_A,nan\nFOO_B,inf\nFOO_C,1e40\nWAY_TOO_LONG_PARAM_NAME_X,1\nÄÖ,1\n")
             c.check("non-finite values rejected by ParamFile.parse", f.values.allSatisfy(\.isFinite), "\(f)")
-        },
-        "probe:mission_item_nan_coord": { c in
+        }
+        d["probe:mission_item_nan_coord"] = { (c: Ctx) in
             _ = MissionItem(latitude: .nan, longitude: 0)
             c.check("MissionItem(latitude: .nan) does not trap", true)
-        },
-        "probe:survey_nan_angle": { c in
+        }
+        d["probe:survey_nan_angle"] = { (c: Ctx) in
             var o = SurveyGrid.Options(); o.angle = .nan
             let poly = [GeoPoint(latitude: -35.36, longitude: 149.16), GeoPoint(latitude: -35.361, longitude: 149.16),
                         GeoPoint(latitude: -35.361, longitude: 149.161)]
@@ -50,8 +52,8 @@ enum Probes {
             c.link.mission.surveyPolygon = poly
             _ = c.link.mission.addSurvey(options: o, cameraTriggerDistance: 0)
             c.check("survey with NaN angle does not trap", true)
-        },
-        "probe:survey_huge": { c in
+        }
+        d["probe:survey_huge"] = { (c: Ctx) in
             var o = SurveyGrid.Options(); o.spacing = 0.6
             let poly = [GeoPoint(latitude: 0, longitude: 0), GeoPoint(latitude: 0.2, longitude: 0),
                         GeoPoint(latitude: 0.2, longitude: 0.2), GeoPoint(latitude: 0, longitude: 0.2)]
@@ -60,45 +62,45 @@ enum Probes {
             let n = c.link.mission.addSurvey(options: o, cameraTriggerDistance: 0)
             c.metric("survey_points", n); c.metric("survey_s", String(format: "%.1f", Date().timeIntervalSince(t0)))
             c.check("22 km survey at 0.6 m spacing handled (no trap)", true, "\(c.link.mission.mission.count) items")
-        },
+        }
         // exact expressions from SwiftUI views
-        "probe:hud_label_nan": { c in
+        d["probe:hud_label_nan"] = { (c: Ctx) in
             let roll = Double(opaque(Float.nan)) * 180 / .pi, pitch = 0.0, heading = 0.0
             // HUDView accessibility label, mirrors the fixed HUDView.whole() (BUG-003)
             let s = "Artificial horizon: roll \(Probes.whole(roll)), pitch \(Probes.whole(pitch)), heading \(Probes.whole(heading))"
             c.check("HUD label with NaN roll", true, s)
-        },
-        "probe:hud_label_huge": { c in
+        }
+        d["probe:hud_label_huge"] = { (c: Ctx) in
             let roll = Double(opaque(Float(3e38))) * 180 / .pi
             let s = "roll \(Probes.whole(roll))" // mirrors HUDView.whole (BUG-003)
             c.check("HUD label with 3e38 rad roll", true, s)
-        },
-        "probe:fltmode_ch0": { c in
+        }
+        d["probe:fltmode_ch0"] = { (c: Ctx) in
             let rc = [UInt16](repeating: 1500, count: 18)
             let v = opaque(Float(0)) // FLTMODE_CH = 0 ("Disabled", a valid ArduCopter value)
             // mirrors the fixed FlightModesPage (BUG-005)
             let channel = v.isFinite ? Int(max(0, min(32, v.rounded()))) : 0
             let s = channel == 0 ? "Mode switch disabled" : (channel <= rc.count ? String(rc[channel - 1]) : "—")
             c.check("Flight modes page with FLTMODE_CH=0", true, s)
-        },
-        "probe:takeoff_alt_huge": { c in
+        }
+        d["probe:takeoff_alt_huge"] = { (c: Ctx) in
             let takeoffAlt = opaque(1e20) // what TextField(.number) yields for "100000000000000000000"
             // mirrors the fixed ActionsView title (ActionLimits.text, BUG-006)
             let s = "Take off to \(takeoffAlt.isFinite ? String(format: "%.0f", takeoffAlt) : "?") m?"
             c.check("Actions tab with a 21-digit takeoff altitude", true, s)
-        },
-        "probe:fltmode_picker_negative": { c in
+        }
+        d["probe:fltmode_picker_negative"] = { (c: Ctx) in
             let p = opaque(Float(-1)) // FLTMODEn read back as -1 (corrupt/unknown)
             let v = UInt32(exactly: p.rounded()) ?? 0 // mirrors the fixed flight-mode picker (BUG-005)
             c.check("Flight mode picker with value -1", true, "\(v)")
-        },
-        "probe:waypoint_editor_lat_300": { c in
+        }
+        d["probe:waypoint_editor_lat_300"] = { (c: Ctx) in
             var item = MissionItem(latitude: -35.36, longitude: 149.16, altitude: 50)
             let typed = opaque(300.0) // user types 300 in Plan > waypoint > Latitude (PlanView.swift:345)
             item.latitude = typed
             c.check("waypoint editor latitude 300 does not trap", true, "\(item.x)")
-        },
-        "probe:elrs_backpack_json": { c in
+        }
+        d["probe:elrs_backpack_json"] = { (c: Ctx) in
             let cases = [#"{"ports":{"listen":0,"send":0}}"#, #"{"ports":{"listen":14555,"send":14550},"enabled":false}"#,
                          #"{"ports":{"listen":70000,"send":1}}"#, #"{"enabled":true}"#]
             for j in cases {
@@ -110,9 +112,9 @@ enum Probes {
             let listen = zero.map { $0.ports.listen } ?? 0
             let used = listen != 0 ? listen : 14555
             c.check("ports 0/0 from backpack fall back to the typed ports", used == 14555, "would use \(used)")
-        },
+        }
         // New DataFlash (.bin) parser from origin/main: mutate the real fixture and feed random data.
-        "probe:dataflash_fuzz": { c in
+        d["probe:dataflash_fuzz"] = { (c: Ctx) in
             signal(SIGTRAP, fuzzTrapHandler); signal(SIGILL, fuzzTrapHandler)
             let fixture = URL(fileURLWithPath: CommandLine.arguments.first { $0.hasSuffix("sample.bin") }
                 ?? "Packages/MAVLinkKit/Tests/MAVLinkKitTests/Fixtures/sample.bin")
@@ -139,9 +141,9 @@ enum Probes {
             c.metric("dataflash_inputs", n); c.metric("parsed", ok); c.metric("threw", threw)
             c.metric("seconds", String(format: "%.1f", Date().timeIntervalSince(t0)))
             c.check("\(n) mutated/random .bin inputs parsed or rejected without a trap", true)
-        },
+        }
         // MAVLinkKit command session: same-command-id overwrite
-        "probe:command_overwrite": { c in
+        d["probe:command_overwrite"] = { (c: Ctx) in
             let s = CommandSession(targetSystem: 1)
             _ = s.arm(true, now: 0)
             _ = s.arm(false, now: 0.1) // user hits Disarm before the arm ACK arrives
@@ -151,8 +153,9 @@ enum Probes {
             c.check("ACK of the ARM must not complete the pending DISARM",
                     !(ev == [.accepted(command: MAVCmd.componentArmDisarm)] && s.pendingCommands.isEmpty && r.messages.isEmpty),
                     "events=\(ev) pending=\(s.pendingCommands) resent=\(r.messages.count)")
-        },
-    ]
+        }
+        return d
+    }()
 
     static func accel(_ c: Ctx, _ p1: Float) {
         let cal = CalibrationStore()
