@@ -30,14 +30,14 @@ fix is listed in `testing/FIX_LOG.md` with its cause, change and proof. Code cha
 ### How it was tested
 | Check | Result |
 |---|---|
-| MAVLinkKit unit tests (incl. new regression tests and an ArduPilot-like lossy mission vehicle) | 61/61 |
+| MAVLinkKit unit tests (incl. new regression tests and an ArduPilot-like lossy mission vehicle) | 63/63 |
 | Headless app harness vs fake drone: scenarios, crash probes, fuzzers (`python3 testing/scenarios/run.py -j 4 all`) | 86/86, 0 crashes (before: 16 crashes, 24 fails) |
 | ArduCopter/Rover/Sub 4.7.3 SITL (`run.py -j 4 sitl`) | 21/21 |
 | Thread Sanitizer on the link scenarios | 0 races (before: 4) |
 | Mac Catalyst UI tests (`testing/sim/catalyst.sh uitest`) | the former crash tests and BUG-001/-008/-013 pass; remaining failures are XCUITest limits (ADS-B labels, list scrolling) |
 
-Independent reviews: `testing/REVIEW_1.md` (7 required changes), `testing/REVIEW_2.md` (2) and `testing/REVIEW_3.md` (2),
-all applied, see `testing/FIX_LOG.md`.
+Independent reviews: `testing/REVIEW_1.md` (7 required changes), `testing/REVIEW_2.md` (2), `testing/REVIEW_3.md` (2) and
+`testing/REVIEW_4.md` (1), all applied, see `testing/FIX_LOG.md`.
 New CI job `break-test` runs the harness scenarios and probes on every push and PR.
 
 ### Known remaining (documented)

@@ -20,11 +20,22 @@ final class SimulatedMissionVehicle {
     /// Last finished upload: a re-sent final item (our ACK was lost) is ACKed again.
     private var lastCompleted: (type: UInt8, count: Int)?
     private let sender = MAVLinkSender(systemID: 1, componentID: 1)
-    private var rng = SystemRandomNumberGenerator()
+    /// SplitMix64: seeded, so a lossy run can be repeated exactly (review 4: an unseeded RNG made the 200-run test flaky).
+    private var state: UInt64
 
-    init(dropRate: Double) { self.dropRate = dropRate }
+    init(dropRate: Double, seed: UInt64 = 0x9E3779B97F4A7C15) {
+        self.dropRate = dropRate
+        state = seed
+    }
 
-    private func lost() -> Bool { Double.random(in: 0..<1, using: &rng) < dropRate }
+    private func lost() -> Bool {
+        state &+= 0x9E3779B97F4A7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+        z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+        z ^= z >> 31
+        return Double(z >> 11) / Double(1 << 53) < dropRate
+    }
 
     func receive(_ frames: [[UInt8]]) -> [[UInt8]] {
         var out: [MAVLinkMessage] = []
@@ -201,12 +212,29 @@ final class MissionTests: XCTestCase {
         }
     }
 
+    /// Review 4 (optional): a single rally point that moved; its only item is lost and the vehicle keeps the old one.
+    func testSingleRallyPointMoveIsVerified() {
+        let old = [MissionItem(seq: 0, frame: 3, command: MissionCmd.rallyPoint, latitude: -35.36, longitude: 149.16, altitude: 30, missionType: .rally)]
+        let edited = [MissionItem(seq: 0, frame: 3, command: MissionCmd.rallyPoint, latitude: -35.30, longitude: 149.16, altitude: 30, missionType: .rally)]
+        let v = SimulatedMissionVehicle(dropRate: 0)
+        v.arduPilotLike = true
+        v.writeThrough = true
+        v.stored[2] = old
+        v.dropSeq = 0
+        let s = MissionSession(targetSystem: 1, config: .narrowLink)
+        let up = run(s, v, start: s.startUpload(.rally, items: edited, now: 0))
+        XCTAssertFalse(up.contains(.uploaded(type: .rally, count: 1)), "old rally point reported as uploaded: \(up.suffix(2))")
+    }
+
     /// BUG-033: uploads to an ArduPilot-like vehicle at 30 % loss each way must all end "uploaded" (verified by read-back
     /// when the final ACK is lost), never "Invalid sequence" / "Error". Review 1: 200 runs, no failure allowed.
     func testUploadToArduPilotLikeVehicleSurvivesLoss() {
         var failures: [String] = []
-        for attempt in 0..<200 {
-            let v = SimulatedMissionVehicle(dropRate: 0.3)
+        // Seeded (review 4), so the result is repeatable. LOSSY_RUNS=3000 tries more seeds: about 1 in 3000 then ends in
+        // "No answer from vehicle" because 16 tries in a row for one item were lost (0.51^16): the dead-link limit, by design.
+        let runs = ProcessInfo.processInfo.environment["LOSSY_RUNS"].flatMap { Int($0) } ?? 200
+        for attempt in 0..<runs {
+            let v = SimulatedMissionVehicle(dropRate: 0.3, seed: UInt64(attempt))
             v.arduPilotLike = true
             let s = MissionSession(targetSystem: 1, config: .narrowLink)
             let items = sampleMission(13)
@@ -214,7 +242,7 @@ final class MissionTests: XCTestCase {
             if !up.contains(.uploaded(type: .mission, count: items.count)) { failures.append("run \(attempt): \(up.suffix(1))") }
             else if v.stored[0]?.count != items.count { failures.append("run \(attempt): stored \(v.stored[0]?.count ?? -1)") }
         }
-        XCTAssertEqual(failures.count, 0, "\(failures.count)/200 failed: \(failures.prefix(3))")
+        XCTAssertEqual(failures.count, 0, "\(failures.count)/\(runs) failed: \(failures.prefix(3))")
     }
 
     func testUploadThenDownloadRoundTripsThroughLossyLink() {

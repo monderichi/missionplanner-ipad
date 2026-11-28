@@ -87,3 +87,10 @@ Code comments at each change are tagged `// BUG-0xx:`.
 | 1 | The "count matches and ≤ 1 item → done" shortcut applies only to a home-only **mission**. A one-item fence (single circle) or rally upload is read back like any other. | `testSingleFenceCircleAndRadiusChangeAreVerified` (moved single circle) |
 | 2 | Fence read-back compares `param1`: circle radius ±1 m, vertex count of polygon vertices exact. | `testSingleFenceCircleAndRadiusChangeAreVerified` (radius-only change), `sitl_fence_rally.sh` |
 | opt. | The short ACK window for released queued commands was removed: ignoring a command's own fast ACK made each queued servo/motor/camera command go out twice. A rare duplicate ACK of the previous command is the smaller risk. | `test_BUG002_servoTapsAreNotDropped`, unit 61/61, fake drone 86/86, SITL subset 5/5 |
+
+## Review 4 (testing/REVIEW_4.md): required change applied
+
+| # | Change | Proof |
+|---|---|---|
+| 1 | A queued command released after its predecessor's ACK is not resolved by an ACK before it has been sent (`attempts == 0`): that ACK can only be a duplicate for the predecessor. If the predecessor was resent, the released command's first send gets a short window (`min(0.5 s, timeout/3)`) for late duplicates. On a clean link each command still goes out once. | `test_BUG002_duplicateAckDoesNotAcceptUnsentQueuedCommand`, `test_BUG002_servoTapsAreNotDropped` |
+| opt. | One-item rally upload verified (`testSingleRallyPointMoveIsVerified`). The simulated mission vehicle's RNG is seeded (SplitMix64), so the 200-run lossy test is repeatable. With `LOSSY_RUNS=3000` about 1 run in 3000 ends in "No answer from vehicle": 16 tries in a row for one item lost at 30 % each way (0.51^16), which is the dead-link limit working as designed. | unit 63/63, fake drone 86/86, SITL subset 4/4 |

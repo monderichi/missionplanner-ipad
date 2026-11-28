@@ -117,3 +117,6 @@ The user's original request is kept verbatim at the end; the version below is th
 - 08:20 Usage limit hit 05:0x–08:10 (review 3 agent stopped by rate limit; resumed). CI break-test still timed out type-checking one probe closure (DataFlash fuzz): moved to a typed function + raised the harness-only type-check threshold; pushed ec0f60d.
 - 08:35 Review 3: CHANGES REQUIRED (2, mission read-back: one-item fence/rally skipped verify; circle radius not compared). Both
   applied + the optional queued-ACK-window removal. Verified: unit 61/61, fake drone 86/86, SITL subset 5/5. Next: review 4.
+- 08:55 CI green after 8931fcb (90 s reconnect param wait; ':' removed from log names). Review 4: CHANGES REQUIRED (1: a duplicate
+  ACK could accept a released, still-unsent queued command). Fixed + seeded the lossy mission sim. Unit 63/63, fake drone 86/86,
+  SITL subset 4/4. Next: review 5.

@@ -70,6 +70,26 @@ final class BreakTestRegressionTests: XCTestCase {
         XCTAssertEqual(sent, [5, 6, 7])
     }
 
+    /// Review 4: servo 5's ACK is late, so it is resent; both ACKs then arrive together. The duplicate must not accept
+    /// servo 6, which was released from the queue but not sent yet: servo 6 goes out and is confirmed by its own ACK.
+    func test_BUG002_duplicateAckDoesNotAcceptUnsentQueuedCommand() {
+        let s = CommandSession(targetSystem: 1) // timeout 1.5 s
+        var sent: [Float] = []
+        var accepted: [Float] = [] // channel of the in-flight command when each `accepted` fires
+        func note(_ e: [CommandSession.Event], _ ch: Float?) { accepted += e.filter { if case .accepted = $0 { return true }; return false }.compactMap { _ in ch } }
+        for ch in [Float(5), 6] { sent += s.send(183, params: [ch, 1900], now: 0).compactMap { ($0 as? MAV.CommandLong)?.param1 } }
+        sent += s.tick(now: 1.5).messages.compactMap { ($0 as? MAV.CommandLong)?.param1 } // servo 5 resent
+        for t in [1.6, 1.6] { let ch = s.inFlight(183)?.param1; note(s.handle(ack(183), now: t), ch) } // original + duplicate
+        XCTAssertEqual(accepted, [5], "duplicate ACK of servo 5 accepted servo 6 before it was sent")
+        sent += s.tick(now: 1.75).messages.compactMap { ($0 as? MAV.CommandLong)?.param1 } // servo 6 first send
+        do { let ch = s.inFlight(183)?.param1; note(s.handle(ack(183), now: 1.8), ch) } // a late third copy for servo 5: still ambiguous
+        XCTAssertEqual(accepted, [5])
+        do { let ch = s.inFlight(183)?.param1; note(s.handle(ack(183), now: 2.4), ch) } // servo 6's own ACK
+        XCTAssertEqual(sent, [5, 5, 6])
+        XCTAssertEqual(accepted, [5, 6])
+        XCTAssertTrue(s.pendingCommands.isEmpty)
+    }
+
     /// BUG-002: emergency force-disarm is never queued.
     func test_BUG002_forceDisarmGoesOutImmediately() {
         let s = CommandSession(targetSystem: 1)
