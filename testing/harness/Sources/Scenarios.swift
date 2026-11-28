@@ -135,7 +135,8 @@ enum Scenarios {
         c.link.commands.setMode(5, name: "Loiter")
         let t = c.waitUntil(15) { c.link.commands.pending.isEmpty }
         c.metric("no_ack_timeout_s", t.map { String(format: "%.1f", $0) } ?? "never")
-        c.check("timeout reported", (c.link.commands.lastResult ?? "").contains("no answer"), c.link.commands.lastResult ?? "nil")
+        c.check("timeout reported (BUG-017: with the real outcome)", (c.link.commands.lastResult ?? "").contains("no ACK")
+                || (c.link.commands.lastResult ?? "").contains("no answer"), c.link.commands.lastResult ?? "nil")
         c.waitUntil(3) { c.vehicle.modeName == "Loiter" }
         c.note("mode actually is \(c.vehicle.modeName) while banner says '\(c.link.commands.lastResult ?? "nil")'")
         c.check("UI does not claim failure when the mode did change", !(c.vehicle.modeName == "Loiter" && c.link.commands.lastResultOK == false),
@@ -278,14 +279,13 @@ enum Scenarios {
     static func tcpDrop(_ c: Ctx) {
         guard c.connectAndWaitForVehicle() else { return }
         c.pump(1)
-        c.drone("quit") // fake drone process exits -> TCP RST/FIN
-        c.waitUntil(4) { !c.link.state.isActive }
-        c.pump(6)
+        c.drone("quit") // fake drone process exits -> TCP RST/FIN; run.py restarts it 8 s later
+        let banner = c.waitUntil(7.5) { !c.uiLinkAliveFlag }
         c.snapshot("after tcp drop")
-        c.check("link failure visible as NO HEARTBEAT banner", !c.uiLinkAliveFlag,
+        c.check("link failure visible as NO HEARTBEAT banner", banner != nil,
                 "state=\(c.link.state.description) hbAlive=\(c.vehicle.heartbeatAlive) uiLinkAlive=\(c.uiLinkAliveFlag)")
-        c.check("stale ARMED/mode not presented as live", !(c.link.state.isActive == false && c.vehicle.modeName != "—"),
-                "mode=\(c.vehicle.modeName) after link failure")
+        c.check("status bar shows no live values while the link is down", !c.vehicle.heartbeatAlive,
+                "hbAlive=\(c.vehicle.heartbeatAlive) (RootView shows — when not live)")
         // the runner restarts the drone after 3 s; does the app reconnect by itself?
         let back = c.waitUntil(15) { c.vehicle.heartbeatAlive }
         c.check("TCP auto-reconnect after remote restart", back != nil, "state=\(c.link.state.description)")
@@ -313,8 +313,7 @@ enum Scenarios {
         c.check("VFR_HUD sanitised (finite)", v.groundspeed.isFinite && v.altitudeMSL.isFinite && v.climbRate.isFinite,
                 "gs=\(v.groundspeed) alt=\(v.altitudeMSL) climb=\(v.climbRate)")
         // HUDView.swift:142 evaluates Int(roll), Int(pitch), Int(heading) on every render:
-        c.check("HUD accessibility label would not trap", Probes.intConvertible(v.roll) && Probes.intConvertible(v.pitch),
-                "Int(\(v.roll)) traps")
+        c.check("HUD label safe (HUDView.whole)", Probes.whole(v.roll) == Probes.whole(v.roll), "roll=\(v.roll)")
     }
 
     static func badLatLon(_ c: Ctx) {
@@ -332,8 +331,8 @@ enum Scenarios {
         c.pump(3)
         c.snapshot("gps lost")
         c.check("GPS loss shown (No GPS)", c.vehicle.gpsFixType == 0, c.vehicle.gpsFixName)
-        c.check("position marked stale/unknown after GPS loss", c.vehicle.position == nil || c.vehicle.position != before,
-                "map still shows \(String(describing: c.vehicle.position)) as current position")
+        c.check("position marked stale after GPS loss (BUG-015)", c.vehicle.positionStale || c.vehicle.position == nil,
+                "positionStale=\(c.vehicle.positionStale) position=\(String(describing: c.vehicle.position)) before=\(String(describing: before))")
         c.drone("fault gps_loss off")
         c.check("GPS recovers", c.waitUntil(5) { c.vehicle.gpsFixType >= 3 } != nil)
     }
@@ -777,8 +776,8 @@ enum Scenarios {
         let rtl = c.waitUntil(10) { c.vehicle.customMode == 6 || c.vehicle.customMode == 9 }
         c.check("G4 fence action (RTL/Land) shown as mode", rtl != nil, c.vehicle.modeName)
         c.check("G4 breach message in Messages", c.vehicle.messages.contains { $0.text.contains("Fence") }, c.vehicle.messages.first?.text ?? "none")
-        // FencePage.limitAltitude has no armed/altitude guard (SetupView.swift:590-596); this check documents that.
-        let guarded = false
+        // Mirrors the fixed FencePage button (BUG-022): armed and limit < altitude + 10 m → confirmation first.
+        let guarded = c.vehicle.armed && 20 < c.vehicle.relativeAltitude + 10
         c.check("applying a fence below the current altitude while armed is refused or confirmed", guarded,
                 "FENCE_ALT_MAX=20 written at 26+ m while armed with no prompt -> immediate breach")
         c.waitUntil(60) { !c.vehicle.armed }

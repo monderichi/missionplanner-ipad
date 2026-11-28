@@ -188,7 +188,9 @@ final class NWClientTransport: MAVTransport {
                 }
             case .failed(let error):
                 self.onStateChange?(.failed(Self.explain(error)))
-                if self.proto == .udp { self.retryLater(gen) } // UDP has no session to lose: just reopen
+                // BUG-001: TCP reconnects too (it used to stay failed for good after a reset/refused connection,
+                // e.g. SITL or a TCP bridge restarting in flight). Retries every 2 s until the user disconnects.
+                self.retryLater(gen)
             case .cancelled:
                 break
             default:
@@ -229,7 +231,8 @@ final class NWClientTransport: MAVTransport {
                 guard let self, gen == self.generation, !self.closed else { return }
                 if let data, !data.isEmpty { self.onReceive?(data) }
                 if isComplete {
-                    self.onStateChange?(.failed("Connection closed by remote"))
+                    self.onStateChange?(.failed("Connection closed by remote · reconnecting"))
+                    self.retryLater(gen) // BUG-001
                 } else if error == nil {
                     self.receive(on: connection, gen: gen)
                 }

@@ -102,7 +102,7 @@ struct ActionsView: View {
                         Spacer()
                         Button("Takeoff") { confirmTakeoff = true }
                             .buttonStyle(.borderedProminent)
-                            .disabled(!ready || !vehicle.armed || !inGuided || takeoffAlt < 1)
+                            .disabled(!ready || !vehicle.armed || !inGuided || !ActionLimits.takeoff.ok(takeoffAlt)) // BUG-006
                     }
                     Text("Switch to Guided and arm first, then Takeoff (Mission Planner does the same).")
                         .font(.caption).foregroundColor(.secondary)
@@ -118,9 +118,9 @@ struct ActionsView: View {
                     Spacer()
                     Button("Change speed") {
                         commands.command(MissionCmd.doChangeSpeed, params: [1, Float(speed), -1, 0],
-                                         label: "Change speed to \(Int(speed)) m/s")
+                                         label: "Change speed to \(ActionLimits.text(speed)) m/s") // BUG-006
                     }
-                    .disabled(!ready || speed <= 0)
+                    .disabled(!ready || !ActionLimits.speed.ok(speed)) // BUG-006
                 }
                 HStack {
                     Text("Altitude")
@@ -131,7 +131,7 @@ struct ActionsView: View {
                     Button("Change altitude") {
                         if let p = vehicle.position { mission.guidedGoTo(p, altitude: Float(newAlt)) }
                     }
-                    .disabled(!ready || !inGuided || vehicle.position == nil)
+                    .disabled(!ready || !inGuided || vehicle.position == nil || !ActionLimits.altitude.ok(newAlt)) // BUG-006
                 }
                 HStack {
                     Button("Restart mission") { mission.setCurrent(1) }
@@ -160,7 +160,13 @@ struct ActionsView: View {
                 Text("Connect to a vehicle to use these controls.").font(.caption).foregroundColor(.secondary)
             }
         }
-        .onAppear { selectedMode = vehicle.customMode }
+        .onAppear {
+            selectedMode = vehicle.customMode
+            // BUG-006: repair values persisted by older builds
+            if !ActionLimits.takeoff.ok(takeoffAlt) { takeoffAlt = 10 }
+            if !ActionLimits.speed.ok(speed) { speed = 5 }
+            if !ActionLimits.altitude.ok(newAlt) { newAlt = 30 }
+        }
         .onChange(of: vehicle.customMode) { selectedMode = $0 }
         .alert("Arm motors?", isPresented: $confirmArm) {
             Button("Arm", role: .destructive) { commands.arm(true) }
@@ -175,10 +181,11 @@ struct ActionsView: View {
         } message: {
             Text("Force disarm stops the motors even in flight: the vehicle will fall. Use it only in an emergency.")
         }
-        .alert("Take off to \(Int(takeoffAlt)) m?", isPresented: $confirmTakeoff) {
+        // BUG-006: this title is built on every render: Int(1e20) trapped and, being @AppStorage, crashed every launch.
+        .alert("Take off to \(ActionLimits.text(takeoffAlt)) m?", isPresented: $confirmTakeoff) {
             Button("Take off", role: .destructive) {
                 commands.command(MissionCmd.takeoff, params: [0, 0, 0, 0, 0, 0, Float(takeoffAlt)],
-                                 label: "Takeoff to \(Int(takeoffAlt)) m")
+                                 label: "Takeoff to \(ActionLimits.text(takeoffAlt)) m")
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -200,4 +207,24 @@ struct ActionsView: View {
             Text("The link drops for a few seconds while the flight controller restarts.")
         }
     }
+}
+
+/// BUG-006: sane ranges for the Actions inputs (and fly-here). Values outside disable the button; stored values that
+/// are out of range (e.g. a persisted 1e20) are reset on appear so the tab can never crash-loop.
+enum ActionLimits {
+    case takeoff, speed, altitude, flyHere
+
+    var range: ClosedRange<Double> {
+        switch self {
+        case .takeoff: return 1...500
+        case .speed: return 0.1...50
+        case .altitude: return 1...1000
+        case .flyHere: return 2...500
+        }
+    }
+
+    func ok(_ v: Double) -> Bool { v.isFinite && range.contains(v) }
+
+    /// Whole-number text for labels without Int() (which traps on NaN/huge values).
+    static func text(_ v: Double) -> String { v.isFinite ? String(format: "%.0f", v) : "?" }
 }

@@ -5,6 +5,9 @@ import UniformTypeIdentifiers
 
 struct ConnectView: View {
     @EnvironmentObject var link: LinkManager
+    @EnvironmentObject var vehicle: VehicleModel
+    /// BUG-013: an action that would drop the link to an ARMED vehicle, waiting for confirmation.
+    @State private var confirmArmed: (title: String, action: () -> Void)?
     @Environment(\.dismiss) private var dismiss
     @StateObject private var scanner = BLEScanner()
     @State private var showLogImporter = false
@@ -16,6 +19,20 @@ struct ConnectView: View {
     @AppStorage("link.ble") private var bleIDText = ""
 
     private var kind: LinkKind { LinkKind(rawValue: kindRaw) ?? .udpListen }
+
+    /// BUG-024: out-of-range ports used to fall back to the default silently.
+    private var portError: String? {
+        guard kind != .ble else { return nil }
+        if (UInt16(portText.trimmingCharacters(in: .whitespaces)) ?? 0) == 0 { return "Port must be 1–65535" }
+        if kind == .udpConnect || kind == .elrs,
+           (UInt16(localPortText.trimmingCharacters(in: .whitespaces)) ?? 0) == 0 { return "iPad port must be 1–65535" }
+        return nil
+    }
+
+    /// BUG-013: Disconnect, Reconnect and Replay drop the live link; ask first when the vehicle is armed.
+    private func guarded(_ title: String, _ action: @escaping () -> Void) {
+        if vehicle.armed && vehicle.heartbeatAlive { confirmArmed = (title, action) } else { action() }
+    }
 
     var body: some View {
         NavigationStack {
@@ -111,17 +128,21 @@ struct ConnectView: View {
                 Section {
                     if link.state.isActive {
                         Button("Disconnect", role: .destructive) {
-                            link.disconnect()
+                            guarded("Disconnect") { link.disconnect() }
                         }
                     }
                     Button(link.state.isActive ? "Reconnect" : "Connect") {
-                        link.connect(kind: kind, host: host.trimmingCharacters(in: .whitespaces),
-                                     port: UInt16(portText) ?? kind.defaultPort,
-                                     localPort: UInt16(localPortText) ?? 14550,
-                                     bleDevice: UUID(uuidString: bleIDText))
-                        dismiss()
+                        let go = {
+                            link.connect(kind: kind, host: host.trimmingCharacters(in: .whitespaces),
+                                         port: UInt16(portText.trimmingCharacters(in: .whitespaces)) ?? kind.defaultPort,
+                                         localPort: UInt16(localPortText.trimmingCharacters(in: .whitespaces)) ?? 14550,
+                                         bleDevice: UUID(uuidString: bleIDText))
+                            dismiss()
+                        }
+                        if link.state.isActive { guarded("Reconnect", go) } else { go() }
                     }
-                    .disabled(kind == .ble && UUID(uuidString: bleIDText) == nil)
+                    .disabled(portError != nil || (kind == .ble && UUID(uuidString: bleIDText) == nil)) // BUG-024
+                    if let e = portError { Text(e).font(.caption).foregroundColor(.red) }
                 }
 
                 Section {
@@ -131,8 +152,7 @@ struct ConnectView: View {
                     }
                     ForEach(logs.prefix(8), id: \.self) { url in
                         Button {
-                            link.startReplay(url: url)
-                            dismiss()
+                            guarded("Replay") { link.startReplay(url: url); dismiss() } // BUG-013
                         } label: {
                             Label(url.lastPathComponent, systemImage: "play.rectangle")
                         }
@@ -146,9 +166,14 @@ struct ConnectView: View {
             }
             .fileImporter(isPresented: $showLogImporter, allowedContentTypes: [.item]) { result in
                 if case .success(let url) = result {
-                    link.startReplay(url: url)
-                    dismiss()
+                    guarded("Replay") { link.startReplay(url: url); dismiss() } // BUG-013
                 }
+            }
+            .alert("Vehicle is ARMED", isPresented: Binding(get: { confirmArmed != nil }, set: { if !$0 { confirmArmed = nil } })) {
+                Button(confirmArmed?.title ?? "Continue", role: .destructive) { confirmArmed?.action(); confirmArmed = nil }
+                Button("Cancel", role: .cancel) { confirmArmed = nil }
+            } message: {
+                Text("\(confirmArmed?.title ?? "This") drops the live link to an armed vehicle. You will lose telemetry and control from this iPad.")
             }
             .navigationTitle("Connect")
             .navigationBarTitleDisplayMode(.inline)

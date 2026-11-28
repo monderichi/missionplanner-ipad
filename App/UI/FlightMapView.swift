@@ -127,13 +127,27 @@ struct FlightMapView: View {
     private func flyHere() {
         guard let p = flyTarget else { return }
         flyTarget = nil
-        if let g = ArduPilotModes.guided(for: vehicle.vehicleType), vehicle.customMode != g {
-            commands.setMode(g, name: "Guided")
+        // BUG-006/-011: refuse altitudes that fly into the ground or out of sight (−5 m used to be sent).
+        guard ActionLimits.flyHere.ok(flyAlt) else {
+            mission.banner = "Fly here: altitude must be 2–500 m above home"
+            return
         }
-        // give the mode change a moment on slow links, then send the guided target
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            mission.guidedGoTo(p, altitude: Float(flyAlt))
+        let alt = Float(flyAlt)
+        guard let g = ArduPilotModes.guided(for: vehicle.vehicleType) else {
+            mission.guidedGoTo(p, altitude: alt)
+            return
         }
+        if vehicle.customMode != g { commands.setMode(g, name: "Guided") }
+        // BUG-011: send the target only once the vehicle reports GUIDED (up to 5 s on slow links), else say why not.
+        waitForGuided(g, deadline: Date().addingTimeInterval(5)) { ok in
+            if ok { mission.guidedGoTo(p, altitude: alt) } else { mission.banner = "Fly here cancelled: the vehicle did not switch to Guided" }
+        }
+    }
+
+    private func waitForGuided(_ g: UInt32, deadline: Date, done: @escaping (Bool) -> Void) {
+        if vehicle.customMode == g { return done(true) }
+        if Date() > deadline { return done(false) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { waitForGuided(g, deadline: deadline, done: done) }
     }
 }
 

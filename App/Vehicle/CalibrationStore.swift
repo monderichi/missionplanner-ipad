@@ -65,7 +65,23 @@ final class CalibrationStore: ObservableObject {
 
     func confirmPosition() {
         guard case .place(let p) = accel else { return }
+        lastConfirm = (p, Date())
         commands?.sendOnce(AccelCalCmd.vehiclePos, params: [Float(p)], label: "\(Self.positionName(p)) done")
+    }
+
+    /// BUG-021: the last position the user confirmed, to resend it if the vehicle keeps asking for the same one
+    /// (the confirm is sent once on purpose, so a lost packet used to stall the calibration on lossy links).
+    private var lastConfirm: (position: UInt32, date: Date)?
+
+    /// BUG-021: ArduPilot also reports the result as STATUSTEXT; use it when the final COMMAND_LONG is lost.
+    func noteStatusText(_ text: String) {
+        switch accel {
+        case .starting, .place:
+            let t = text.lowercased()
+            if t.contains("calibration successful") { accel = .success; lastConfirm = nil }
+            else if t.contains("calibration failed") { accel = .failed; lastConfirm = nil }
+        default: break
+        }
     }
 
     func calibrateLevel() {
@@ -100,11 +116,22 @@ final class CalibrationStore: ObservableObject {
     /// COMMAND_LONG sent by the vehicle to the GCS.
     func handle(_ cmd: MAV.CommandLong) {
         guard cmd.command == AccelCalCmd.vehiclePos else { return }
-        let p = UInt32(cmd.param1)
+        // BUG-009: any COMMAND_LONG 42429 from the vehicle reached this; UInt32(NaN/-1/1e10) trapped the app.
+        guard let p = UInt32(exactly: cmd.param1) else { return }
         switch p {
-        case AccelCalCmd.success: accel = .success
-        case AccelCalCmd.failed: accel = .failed
-        default: accel = .place(position: p)
+        case AccelCalCmd.success: accel = .success; lastConfirm = nil
+        case AccelCalCmd.failed: accel = .failed; lastConfirm = nil
+        case 1...6:
+            // BUG-021: ArduPilot re-requests the current position every second; if it still wants the one the user
+            // confirmed more than 2 s ago, our confirm was lost: resend it.
+            if case .place(let current) = accel, current == p, let c = lastConfirm, c.position == p,
+               Date().timeIntervalSince(c.date) > 2 {
+                lastConfirm = (p, Date())
+                commands?.sendOnce(AccelCalCmd.vehiclePos, params: [Float(p)], label: "\(Self.positionName(p)) done (resent)")
+            }
+            if accel != .place(position: p) { accel = .place(position: p) }
+        default:
+            return // unknown position code: ignore
         }
     }
 

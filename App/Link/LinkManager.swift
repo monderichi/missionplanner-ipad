@@ -56,6 +56,10 @@ final class LinkManager: ObservableObject {
     private var heartbeatTimer: DispatchSourceTimer?
     private var controlTimer: DispatchSourceTimer?
     private var pendingBytes = 0
+    /// ioQueue only: generation of the transport whose bytes are accepted (BUG-032), UI batch (BUG-037).
+    private var ioGeneration = -1
+    private var uiBatch: [MAVLinkPacket] = []
+    private var uiFlushScheduled = false
     private var narrowLink = false
     /// sysid the parameter/command sessions are attached to (survives short link dropouts).
     private var attachedSystem: UInt8?
@@ -66,6 +70,7 @@ final class LinkManager: ObservableObject {
     init() {
         params.send = { [weak self] m in self?.send(any: m) }
         commands.send = { [weak self] m in self?.send(any: m) }
+        commands.vehicle = vehicle // BUG-017
         commands.onRebootAccepted = { [weak self] in
             self?.redownloadAfterReboot = true
             self?.params.markRebooted()
@@ -101,8 +106,8 @@ final class LinkManager: ObservableObject {
         tlogURL = nil
         let t = ReplayTransport(url: url, controller: replay)
         t.onSeekBack = { [weak self] in self?.vehicle.clearTrail() }
-        t.onStateChange = { [weak self] s in DispatchQueue.main.async { self?.state = s } }
-        t.onReceive = { [weak self] data in self?.ioQueue.async { self?.process(data) } }
+        wire(t)
+        speech.muted = true // BUG-025: a replay must not announce "Armed", "Telemetry lost", … as if live
         transport = t
         t.open()
         startTimers(sendHeartbeat: false)
@@ -129,8 +134,15 @@ final class LinkManager: ObservableObject {
             DispatchQueue.main.async {
                 guard let self, gen == self.connectGeneration else { return }
                 self.backpackInfo = info
-                self.open(kind: kind, host: host, port: info?.ports.listen ?? port,
-                          localPort: info?.ports.send ?? localPort, bleDevice: bleDevice)
+                // BUG-023: MAVLink switched off on the backpack: say so instead of waiting for a silent link.
+                if info?.enabled == false {
+                    self.state = .failed("MAVLink is disabled on the backpack: set Backpack Telemetry = WiFi in the ELRS Lua")
+                    return
+                }
+                // BUG-023: port 0 (unset) from the backpack falls back to the typed ports.
+                let listen = info.map { $0.ports.listen } ?? 0, sendPort = info.map { $0.ports.send } ?? 0
+                self.open(kind: kind, host: host, port: listen != 0 ? listen : port,
+                          localPort: sendPort != 0 ? sendPort : localPort, bleDevice: bleDevice)
             }
         }
     }
@@ -170,15 +182,35 @@ final class LinkManager: ObservableObject {
             }
         }
 
-        t.onStateChange = { [weak self] s in
-            DispatchQueue.main.async { self?.state = s }
-        }
-        t.onReceive = { [weak self] data in
-            self?.ioQueue.async { self?.process(data) }
-        }
+        wire(t)
+        speech.muted = false
         transport = t
         t.open()
         startTimers(sendHeartbeat: true)
+    }
+
+    /// BUG-032: the transport's callbacks are set once and never mutated again (clearing them from main while the
+    /// transport's queue called them was a data race found by Thread Sanitizer). Late callbacks from an old
+    /// transport are dropped by the generation checks instead.
+    private func wire(_ t: MAVTransport) {
+        let gen = connectGeneration
+        ioQueue.sync { ioGeneration = gen }
+        t.onStateChange = { [weak self] s in
+            DispatchQueue.main.async {
+                guard let self, gen == self.connectGeneration else { return }
+                self.state = s
+                if case .failed = s, self.isReplaying { // BUG-026: a replay that can't load ends replay mode
+                    self.isReplaying = false
+                    self.speech.muted = false
+                }
+            }
+        }
+        t.onReceive = { [weak self] data in
+            self?.ioQueue.async {
+                guard let self, self.ioGeneration == gen else { return }
+                self.process(data)
+            }
+        }
     }
 
     func disconnect() {
@@ -196,16 +228,22 @@ final class LinkManager: ObservableObject {
         attachedSystem = nil
         attachedComponent = nil
         redownloadAfterReboot = false
-        transport?.onReceive = nil
-        transport?.onStateChange = nil // a late callback from the old link must not overwrite the new state
+        // BUG-032: no callback mutation here (see wire); bumping the generations drops late callbacks.
         transport?.close()
         transport = nil
         ioQueue.sync {
+            ioGeneration = -1
+            uiBatch = []
             tlog?.close()
             tlog = nil
         }
         state = .disconnected
-        vehicle.tick(now: .distantFuture)
+        // BUG-025: a deliberate Disconnect is not "Telemetry lost".
+        speech.suppressLinkAlerts(for: 2)
+        // BUG-012: clear the vehicle so nothing (ARMED, mode, attitude, battery) looks live after Disconnect.
+        vehicle.reset()
+        qualityWindow = []
+        linkQualityPct = nil
     }
 
     // MARK: sending
@@ -273,6 +311,7 @@ final class LinkManager: ObservableObject {
                 DispatchQueue.main.async {
                     self.stats = s
                     self.bytesReceived = n
+                    self.updateLinkQuality(s)
                 }
             }
         }
@@ -325,8 +364,26 @@ final class LinkManager: ObservableObject {
         if let tlog {
             for p in packets { tlog.write(p) }
         }
-        DispatchQueue.main.async { [weak self] in
+        // BUG-037: hand packets to the UI in batches (≤ 20 per second) instead of one main-queue hop and one SwiftUI
+        // invalidation per datagram; at 50 Hz × 8 streams the per-packet updates cost ~48 % CPU.
+        uiBatch += packets
+        guard !uiFlushScheduled else { return }
+        uiFlushScheduled = true
+        let gen = ioGeneration
+        ioQueue.asyncAfter(deadline: .now() + Self.uiBatchInterval) { [weak self] in
             guard let self else { return }
+            let batch = self.uiBatch
+            self.uiBatch = []
+            self.uiFlushScheduled = false
+            guard gen == self.ioGeneration, !batch.isEmpty else { return }
+            DispatchQueue.main.async { self.apply(batch) }
+        }
+    }
+
+    static let uiBatchInterval: TimeInterval = 0.05
+
+    /// Main queue: route a batch of packets to the model and the protocol sessions.
+    private func apply(_ packets: [MAVLinkPacket]) {
             var newVehicle = false
             for p in packets {
                 self.inspector.record(p)
@@ -334,6 +391,9 @@ final class LinkManager: ObservableObject {
                     self.vehicle.handleRadio(p)
                 }
                 if self.vehicle.handle(p) { newVehicle = true }
+                if p.messageID == MAV.Statustext.mavInfo.id, let st = p.decode(MAV.Statustext.self) {
+                    self.calibration.noteStatusText(MAVString.decode(st.text)) // BUG-021
+                }
                 guard p.systemID == self.attachedSystem else { continue }
                 if p.messageID == MAV.ParamValue.mavInfo.id, let m = p.decode(MAV.ParamValue.self) {
                     self.params.handle(m)
@@ -348,6 +408,20 @@ final class LinkManager: ObservableObject {
                 }
             }
             if newVehicle { self.vehicleAppeared() }
-        }
+    }
+
+    // MARK: link quality (BUG-016)
+
+    /// (received, lost) once per second; Link % is computed over the last 5 s, "—" when nothing arrived.
+    private var qualityWindow: [(rx: Int, lost: Int)] = []
+    @Published private(set) var linkQualityPct: Double?
+
+    private func updateLinkQuality(_ s: MAVLinkParser.Stats) {
+        qualityWindow.append((s.packetsReceived, s.packetsLost))
+        if qualityWindow.count > 6 { qualityWindow.removeFirst(qualityWindow.count - 6) }
+        guard let first = qualityWindow.first, let last = qualityWindow.last else { return }
+        let rx = last.rx - first.rx, lost = max(0, last.lost - first.lost)
+        let q: Double? = rx > 0 ? 100 * Double(rx) / Double(rx + lost) : (qualityWindow.count > 1 ? 0 : nil)
+        if q != linkQualityPct { linkQualityPct = q }
     }
 }

@@ -132,6 +132,20 @@ final class VehicleModel: ObservableObject {
     }
     @Published private(set) var traffic: [UInt32: Traffic] = [:]
     static let trafficTimeout: TimeInterval = 60
+    static let maxTraffic = 300 // BUG-039
+
+    /// BUG-015: when the last valid GLOBAL_POSITION_INT arrived; the map greys the vehicle when it is old.
+    private var lastPosition: Date?
+    /// BUG-015: no valid position for 3 s (GPS lost, link quiet) while one was known.
+    @Published private(set) var positionStale = false
+    /// BUG-008: warning banner text (nil = none) and whether it is critical (red).
+    @Published private(set) var warning: String?
+    @Published private(set) var warningCritical = false
+    private var lastAlert: (text: String, date: Date)?
+
+    /// BUG-003: radians that a real attitude can have (non-finite and absurd values are dropped).
+    static func plausibleAngle(_ v: Float) -> Bool { v.isFinite && abs(v) <= 4 * .pi }
+    static func plausible(_ v: Float, _ limit: Float) -> Bool { v.isFinite && abs(v) <= limit }
 
     private var statusChunks: [UInt16: String] = [:]
     static let heartbeatTimeout: TimeInterval = 5
@@ -197,6 +211,15 @@ final class VehicleModel: ObservableObject {
         attitudeStale = false
         heartbeatSources = [:]
         traffic = [:]
+        // BUG-012: clear the live state too, so nothing (ARMED, mode, attitude, battery) looks live after Disconnect.
+        armed = false
+        customMode = 0
+        roll = 0; pitch = 0; yaw = 0
+        groundspeed = 0; airspeed = 0; climbRate = 0; relativeAltitude = 0
+        batteryVoltage = 0; batteryCurrent = 0; batteryRemaining = -1
+        gpsFixType = 0; satellites = 0
+        lastPosition = nil; positionStale = false
+        warning = nil; warningCritical = false; lastAlert = nil
         leakDetected = false
         waterTemperature = nil
     }
@@ -242,6 +265,10 @@ final class VehicleModel: ObservableObject {
         if alive != heartbeatAlive { heartbeatAlive = alive }
         let stale = alive && (lastAttitude.map { now.timeIntervalSince($0) > Self.attitudeTimeout } ?? true)
         if stale != attitudeStale { attitudeStale = stale }
+        // BUG-015: a known position that hasn't been refreshed for 3 s (or GPS fix lost) is shown as stale.
+        let posStale = position != nil && (gpsFixType < 2 || (lastPosition.map { now.timeIntervalSince($0) > 3 } ?? true))
+        if posStale != positionStale { positionStale = posStale }
+        updateWarning(now: now)
         if !traffic.isEmpty {
             let fresh = traffic.filter { now.timeIntervalSince($0.value.lastSeen) < Self.trafficTimeout }
             if fresh.count != traffic.count { traffic = fresh }
@@ -290,7 +317,10 @@ final class VehicleModel: ObservableObject {
 
         // ADS-B traffic comes from any component (FC or an external receiver): before the sysid guard.
         if packet.messageID == MAV.AdsbVehicle.mavInfo.id {
-            if let m = packet.decode(MAV.AdsbVehicle.self), m.lat != 0 || m.lon != 0 {
+            // BUG-039: valid positions only, and at most maxTraffic aircraft (a flood/malformed feed can't grow it).
+            if let m = packet.decode(MAV.AdsbVehicle.self), m.lat != 0 || m.lon != 0,
+               abs(Int(m.lat)) <= 900_000_000, abs(Int(m.lon)) <= 1_800_000_000,
+               traffic[m.ICAOAddress] != nil || traffic.count < Self.maxTraffic {
                 let name = MAVString.decode(m.callsign).trimmingCharacters(in: .whitespaces)
                 traffic[m.ICAOAddress] = Traffic(
                     callsign: name.isEmpty ? String(format: "%06X", m.ICAOAddress) : name,
@@ -314,6 +344,9 @@ final class VehicleModel: ObservableObject {
         switch packet.messageID {
         case MAV.Attitude.mavInfo.id:
             guard let m = packet.decode(MAV.Attitude.self) else { break }
+            // BUG-003: ignore non-finite / impossible attitudes (they trapped the HUD); the watchdog then reports
+            // NO ATTITUDE DATA instead of showing garbage.
+            guard Self.plausibleAngle(m.roll), Self.plausibleAngle(m.pitch), Self.plausibleAngle(m.yaw) else { break }
             lastAttitude = Date()
             roll = Double(m.roll) * 180 / .pi
             pitch = Double(m.pitch) * 180 / .pi
@@ -321,17 +354,20 @@ final class VehicleModel: ObservableObject {
 
         case MAV.VfrHud.mavInfo.id:
             guard let m = packet.decode(MAV.VfrHud.self) else { break }
-            airspeed = Double(m.airspeed)
-            groundspeed = Double(m.groundspeed)
+            // BUG-003: keep the last good value for any non-finite / impossible field.
+            if Self.plausible(m.airspeed, 1000) { airspeed = Double(m.airspeed) }
+            if Self.plausible(m.groundspeed, 1000) { groundspeed = Double(m.groundspeed) }
             heading = Double(m.heading)
             throttle = Int(m.throttle)
-            altitudeMSL = Double(m.alt)
-            climbRate = Double(m.climb)
+            if Self.plausible(m.alt, 100_000) { altitudeMSL = Double(m.alt) }
+            if Self.plausible(m.climb, 1000) { climbRate = Double(m.climb) }
 
         case MAV.GlobalPositionInt.mavInfo.id:
             guard let m = packet.decode(MAV.GlobalPositionInt.self) else { break }
-            if m.lat != 0 || m.lon != 0 {
+            // BUG-004: positions outside ±90/±180 crashed the map (MKMapView setCenter throws); lat=lon=0 = no fix.
+            if (m.lat != 0 || m.lon != 0) && abs(Int(m.lat)) <= 900_000_000 && abs(Int(m.lon)) <= 1_800_000_000 {
                 let p = GeoPoint(latitude: Double(m.lat) / 1e7, longitude: Double(m.lon) / 1e7)
+                lastPosition = Date() // BUG-015
                 latitude = p.latitude
                 longitude = p.longitude
                 if let last = trail.last {
@@ -343,7 +379,7 @@ final class VehicleModel: ObservableObject {
                     trail.append(p)
                 }
             }
-            relativeAltitude = Double(m.relativeAlt) / 1000
+            if abs(Int(m.relativeAlt)) <= 100_000_000 { relativeAltitude = Double(m.relativeAlt) / 1000 } // BUG-003: ±100 km
 
         case MAV.GpsRawInt.mavInfo.id:
             guard let m = packet.decode(MAV.GpsRawInt.self) else { break }
@@ -379,7 +415,8 @@ final class VehicleModel: ObservableObject {
                             m.compassVariance, m.terrainAltVariance].map { Double($0) }
 
         case MAV.HomePosition.mavInfo.id:
-            guard let m = packet.decode(MAV.HomePosition.self) else { break }
+            guard let m = packet.decode(MAV.HomePosition.self),
+                  abs(Int(m.latitude)) <= 900_000_000, abs(Int(m.longitude)) <= 1_800_000_000 else { break } // BUG-004
             homeLatitude = Double(m.latitude) / 1e7
             homeLongitude = Double(m.longitude) / 1e7
             homeAltitudeMSL = Double(m.altitude) / 1000
@@ -423,7 +460,8 @@ final class VehicleModel: ObservableObject {
         case MAV.MagCalReport.mavInfo.id:
             guard let m = packet.decode(MAV.MagCalReport.self) else { break }
             magCalReports[m.compassId] = m
-            magCalProgress[m.compassId] = 100
+            // BUG-028: only a successful report completes the bar; a failed compass keeps its last progress.
+            if m.calStatus == 4 { magCalProgress[m.compassId] = 100 }
 
         case MAV.Vibration.mavInfo.id:
             guard let m = packet.decode(MAV.Vibration.self) else { break }
@@ -442,6 +480,22 @@ final class VehicleModel: ObservableObject {
         radioRSSI = Int(m.rssi)
         radioRemoteRSSI = Int(m.remrssi)
     }
+
+    /// BUG-008: one banner for the most important current problem: a recent failsafe/fence/EKF/battery STATUSTEXT
+    /// (severity ≤ WARNING, kept 15 s), else a low (≤ 20 %) / critical (≤ 10 %) battery. Shown even with speech off.
+    private func updateWarning(now: Date) {
+        var text: String?, critical = false
+        if let a = lastAlert, now.timeIntervalSince(a.date) < 15 {
+            text = a.text.uppercased(); critical = true
+        } else if systemID != nil, heartbeatAlive, batteryRemaining >= 0, batteryRemaining <= 20 {
+            critical = batteryRemaining <= 10
+            text = critical ? "BATTERY CRITICAL \(batteryRemaining)%" : "BATTERY LOW \(batteryRemaining)%"
+        }
+        if text != warning { warning = text }
+        if critical != warningCritical { warningCritical = critical }
+    }
+
+    static let alertWords = ["failsafe", "fence", "ekf", "battery", "crash", "leak", "terrain", "vibration", "gps glitch"]
 
     private func addStatusText(_ st: MAV.Statustext) {
         var text = MAVString.decode(st.text)
@@ -462,6 +516,11 @@ final class VehicleModel: ObservableObject {
             if leakDetected == cleared { leakDetected = !cleared }
         }
         messages.insert(StatusMessage(date: Date(), severity: sev, text: text), at: 0)
+        // BUG-008: safety-relevant warnings become the HUD banner, not just a line in the Messages tab.
+        if sev.rawValue <= MAVSeverity.warning.rawValue {
+            let lower = text.lowercased()
+            if Self.alertWords.contains(where: { lower.contains($0) }) { lastAlert = (text, Date()); updateWarning(now: Date()) }
+        }
         if messages.count > Self.maxMessages { messages.removeLast(messages.count - Self.maxMessages) }
     }
 

@@ -64,31 +64,32 @@ enum Probes {
         // exact expressions from SwiftUI views
         "probe:hud_label_nan": { c in
             let roll = Double(opaque(Float.nan)) * 180 / .pi, pitch = 0.0, heading = 0.0
-            // HUDView.swift:142
-            let s = "Artificial horizon: roll \(Int(roll)), pitch \(Int(pitch)), heading \(Int(heading))"
+            // HUDView accessibility label, mirrors the fixed HUDView.whole() (BUG-003)
+            let s = "Artificial horizon: roll \(Probes.whole(roll)), pitch \(Probes.whole(pitch)), heading \(Probes.whole(heading))"
             c.check("HUD label with NaN roll", true, s)
         },
         "probe:hud_label_huge": { c in
             let roll = Double(opaque(Float(3e38))) * 180 / .pi
-            let s = "roll \(Int(roll))"
+            let s = "roll \(Probes.whole(roll))" // mirrors HUDView.whole (BUG-003)
             c.check("HUD label with 3e38 rad roll", true, s)
         },
         "probe:fltmode_ch0": { c in
             let rc = [UInt16](repeating: 1500, count: 18)
-            let channel = Int(opaque(Float(0))) // FLTMODE_CH = 0 ("Disabled", a valid ArduCopter value)
-            // SetupView.swift:438
-            let s = channel <= rc.count ? "\(rc[channel - 1])" : "—"
+            let v = opaque(Float(0)) // FLTMODE_CH = 0 ("Disabled", a valid ArduCopter value)
+            // mirrors the fixed FlightModesPage (BUG-005)
+            let channel = v.isFinite ? Int(max(0, min(32, v.rounded()))) : 0
+            let s = channel == 0 ? "Mode switch disabled" : (channel <= rc.count ? String(rc[channel - 1]) : "—")
             c.check("Flight modes page with FLTMODE_CH=0", true, s)
         },
         "probe:takeoff_alt_huge": { c in
             let takeoffAlt = opaque(1e20) // what TextField(.number) yields for "100000000000000000000"
-            // ActionsView.swift:169 (alert title is built on every body evaluation)
-            let s = "Take off to \(Int(takeoffAlt)) m?"
+            // mirrors the fixed ActionsView title (ActionLimits.text, BUG-006)
+            let s = "Take off to \(takeoffAlt.isFinite ? String(format: "%.0f", takeoffAlt) : "?") m?"
             c.check("Actions tab with a 21-digit takeoff altitude", true, s)
         },
         "probe:fltmode_picker_negative": { c in
             let p = opaque(Float(-1)) // FLTMODEn read back as -1 (corrupt/unknown)
-            let v = UInt32(p) // SetupView.swift:449
+            let v = UInt32(exactly: p.rounded()) ?? 0 // mirrors the fixed flight-mode picker (BUG-005)
             c.check("Flight mode picker with value -1", true, "\(v)")
         },
         "probe:waypoint_editor_lat_300": { c in
@@ -105,8 +106,10 @@ enum Probes {
                 c.note("\(j) -> \(info.map { "listen=\($0.ports.listen) send=\($0.ports.send) summary=\($0.summary)" } ?? "nil (fallback to typed ports)")")
             }
             let zero = try? JSONDecoder().decode(ELRSBackpackInfo.self, from: Data(cases[0].utf8))
-            c.check("ports 0/0 from backpack are rejected (fallback to typed ports)", zero == nil || zero!.ports.listen != 0,
-                    "app would connect to 10.0.0.1:0 from iPad port 0")
+            // mirrors the fixed LinkManager.connect (BUG-023): port 0 falls back to the typed port
+            let listen = zero.map { $0.ports.listen } ?? 0
+            let used = listen != 0 ? listen : 14555
+            c.check("ports 0/0 from backpack fall back to the typed ports", used == 14555, "would use \(used)")
         },
         // New DataFlash (.bin) parser from origin/main: mutate the real fixture and feed random data.
         "probe:dataflash_fuzz": { c in
@@ -167,16 +170,21 @@ enum Probes {
 
     /// ServoView.isMotor (FlightDataTabs.swift:169-173): unknown function => not a motor (fail-open).
     static func servoIsMotor(_ f: Float?) -> Bool {
-        guard let f else { return false }
-        return (33...40).contains(Int(f)) || (82...85).contains(Int(f))
+        guard let f, f.isFinite else { return true } // mirrors the fixed ServoView.isMotor (BUG-014)
+        let fn = Int(f.rounded())
+        return (33...40).contains(fn) || (82...85).contains(fn)
     }
 
     static func intConvertible(_ d: Double) -> Bool { d.isFinite && abs(d) < 9.2e18 }
 
+    /// Mirrors HUDView.whole (BUG-003 fix).
+    static func whole(_ v: Double) -> Int { v.isFinite ? Int(max(-1_000_000, min(1_000_000, v.rounded()))) : 0 }
+
     /// FlightModesPage (SetupView.swift:414-438) indexes rcChannels[channel-1] when channel <= count.
     static func flightModesPageSafe(_ value: Float?, _ count: Int) -> Bool {
-        let channel = Int(value ?? 5)
-        return !(channel <= count && channel - 1 < 0)
+        let v = value ?? 5 // mirrors the fixed FlightModesPage.channel (BUG-005): 0 means "disabled", never indexed
+        let channel = v.isFinite ? Int(max(0, min(32, v.rounded()))) : 0
+        return channel == 0 || (channel >= 1 && channel <= count) || channel > count
     }
 
     static func rssMB() -> Double {

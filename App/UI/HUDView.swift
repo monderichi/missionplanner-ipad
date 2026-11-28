@@ -22,6 +22,9 @@ struct HUDView: View {
     var isSub: Bool = false
     var depth: Double = 0
     var leakDetected: Bool = false
+    /// BUG-008: active warning (low/critical battery, failsafe, fence, EKF …) shown as a banner, independent of speech.
+    var warning: String? = nil
+    var warningCritical: Bool = false
 
     // computed (not stored) so they don't make the memberwise init private
     private var sky: Color { Color(red: 0.20, green: 0.45, blue: 0.85) }
@@ -156,8 +159,36 @@ struct HUDView: View {
             }
         }
         .background(Color.black)
+        .overlay(alignment: .bottom) {
+            // BUG-008 / TEST-031: a real view (not Canvas drawing) so it is readable by VoiceOver and XCUITest.
+            if let warning {
+                Text(warning)
+                    .font(.system(size: 15, weight: .heavy))
+                    .foregroundColor(warningCritical ? .white : .black)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(warningCritical ? Color.red : Color.orange, in: RoundedRectangle(cornerRadius: 6))
+                    .padding(.bottom, 58)
+                    .accessibilityIdentifier("banner.warning")
+            }
+        }
+        .overlay(alignment: .top) {
+            // TEST-031: invisible accessibility handles for the Canvas banners.
+            VStack(spacing: 0) {
+                if !linkAlive { Color.clear.frame(width: 1, height: 1).accessibilityElement().accessibilityLabel("NO HEARTBEAT")
+                    .accessibilityIdentifier("banner.noHeartbeat") }
+                if linkAlive && attitudeStale { Color.clear.frame(width: 1, height: 1).accessibilityElement()
+                    .accessibilityLabel("NO ATTITUDE DATA").accessibilityIdentifier("banner.noAttitude") }
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: 10))
-        .accessibilityLabel("Artificial horizon: roll \(Int(roll)), pitch \(Int(pitch)), heading \(Int(heading))")
+        // BUG-003: never Int() a telemetry Double directly (NaN/Inf/huge values trapped here on every render).
+        .accessibilityLabel("Artificial horizon: roll \(Self.whole(roll)), pitch \(Self.whole(pitch)), heading \(Self.whole(heading))")
+    }
+
+    /// BUG-003: whole degrees for labels; non-finite → 0, clamped so Int() can't trap.
+    static func whole(_ v: Double) -> Int {
+        guard v.isFinite else { return 0 }
+        return Int(max(-1_000_000, min(1_000_000, v.rounded())))
     }
 
     private func line(from a: CGPoint, to b: CGPoint) -> Path {

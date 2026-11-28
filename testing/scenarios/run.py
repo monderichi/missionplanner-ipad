@@ -54,7 +54,7 @@ S = {
     "fly_here": dict(drone=TCP),
     "link_loss": dict(drone=TCP),
     "link_loss_udp": dict(drone=["--udp-out", "127.0.0.1:14550"], harness=["--kind", "udpListen", "--port", "14550"], name="link_loss"),
-    "tcp_drop": dict(drone=TCP, hooks=[("restart_drone_after_quit", 3.0)]),
+    "tcp_drop": dict(drone=TCP, hooks=[("restart_drone_after_quit", 8.0)]),
     "stale_after_disconnect": dict(drone=TCP),
     "nan_values": dict(drone=TCP + ["--fault", "nan_attitude"]),
     "inf_values": dict(drone=TCP + ["--fault", "inf_values"], name="nan_values"),

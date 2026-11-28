@@ -160,6 +160,7 @@ final class ManualControl: ObservableObject {
 
     /// Deadzone, then a blend of linear and cubic (expo), sign preserved.
     static func shape(_ v: Double) -> Double {
+        guard v.isFinite else { return 0 } // BUG-038: NaN became full deflection via min/max clamping
         let a = abs(v)
         if a < deadzone { return 0 }
         let n = (min(a, 1) - deadzone) / (1 - deadzone)

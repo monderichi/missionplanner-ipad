@@ -210,7 +210,8 @@ struct MapCanvas: UIViewRepresentable {
 
         private func syncVehicle(_ map: MKMapView) {
             let v = parent.vehicle
-            if let p = v.position {
+            // BUG-004: MKMapView throws (uncaught NSException) for an invalid centre; never pass one.
+            if let p = v.position, CLLocationCoordinate2DIsValid(CLLocationCoordinate2D(latitude: p.latitude, longitude: p.longitude)) {
                 let c = CLLocationCoordinate2D(latitude: p.latitude, longitude: p.longitude)
                 vehicleAnnotation.coordinate = c
                 vehicleAnnotation.heading = v.yaw
@@ -218,7 +219,9 @@ struct MapCanvas: UIViewRepresentable {
                 if let view = map.view(for: vehicleAnnotation) {
                     let marker = Coordinator.vehicleMarker(for: v.vehicleType)
                     if view.image !== marker { view.image = marker }
-                    view.transform = CGAffineTransform(rotationAngle: CGFloat((v.yaw - map.camera.heading) * .pi / 180))
+                    let angle = (v.yaw - map.camera.heading) * .pi / 180
+                    if angle.isFinite { view.transform = CGAffineTransform(rotationAngle: CGFloat(angle)) } // BUG-003
+                    view.alpha = v.positionStale ? 0.35 : 1 // BUG-015: a stale position is shown faded
                 }
                 if !centeredOnce {
                     centeredOnce = true
@@ -229,7 +232,7 @@ struct MapCanvas: UIViewRepresentable {
             } else if map.annotations.contains(where: { $0 === vehicleAnnotation }) {
                 map.removeAnnotation(vehicleAnnotation)
             }
-            if let h = v.home {
+            if let h = v.home, CLLocationCoordinate2DIsValid(CLLocationCoordinate2D(latitude: h.latitude, longitude: h.longitude)) {
                 homeAnnotation.coordinate = CLLocationCoordinate2D(latitude: h.latitude, longitude: h.longitude)
                 if !map.annotations.contains(where: { $0 === homeAnnotation }) { map.addAnnotation(homeAnnotation) }
             }

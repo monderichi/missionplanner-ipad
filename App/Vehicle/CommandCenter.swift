@@ -17,13 +17,28 @@ final class CommandCenter: ObservableObject {
 
     var isAttached: Bool { session != nil }
 
+    /// BUG-017: set by LinkManager; used to check the vehicle's real state when an ACK never arrives.
+    weak var vehicle: VehicleModel?
+    private var requestedMode: UInt32?
+    private var requestedArm: Bool?
+
+    /// BUG-027: a session replaced/removed while commands were in flight: say so instead of "Arming…" forever.
+    private func abandonPending() {
+        if let s = session, !s.pendingCommands.isEmpty {
+            lastResult = "\(name(s.pendingCommands[0])): link changed, not confirmed"
+            lastResultOK = false
+        }
+    }
+
     func attach(systemID: UInt8, componentID: UInt8, narrowLink: Bool) {
+        abandonPending()
         session = CommandSession(targetSystem: systemID, targetComponent: componentID,
                                  config: narrowLink ? .narrowLink : CommandSession.Config())
         pending = []
     }
 
     func detach() {
+        abandonPending()
         session = nil
         pending = []
     }
@@ -31,6 +46,7 @@ final class CommandCenter: ObservableObject {
     func arm(_ arm: Bool, force: Bool = false) {
         guard let session else { return }
         session.arm(arm, force: force, now: now).forEach { send?($0) }
+        requestedArm = arm
         lastResult = arm ? "Arming…" : (force ? "Force disarming…" : "Disarming…")
         refreshPending()
     }
@@ -38,6 +54,7 @@ final class CommandCenter: ObservableObject {
     func setMode(_ mode: UInt32, name: String) {
         guard let session else { return }
         session.setMode(mode, now: now).forEach { send?($0) }
+        requestedMode = mode
         lastResult = "Changing mode to \(name)…"
         refreshPending()
     }
@@ -159,8 +176,17 @@ final class CommandCenter: ObservableObject {
             lastResult = "\(name(cmd)): \(CommandSession.resultText(result)). Check Messages for the reason."
             lastResultOK = false
         case .timedOut(let cmd):
-            lastResult = "\(name(cmd)): no answer from vehicle"
-            lastResultOK = false
+            // BUG-017: the ACKs may be lost while the command worked: check the heartbeat state before failing.
+            if cmd == MAVCmd.doSetMode, let m = requestedMode, let v = vehicle, v.heartbeatAlive, v.customMode == m {
+                lastResult = "\(name(cmd)): no ACK, but the vehicle is now in \(v.modeName)"
+                lastResultOK = true
+            } else if cmd == MAVCmd.componentArmDisarm, let a = requestedArm, let v = vehicle, v.heartbeatAlive, v.armed == a {
+                lastResult = "\(name(cmd)): no ACK, but the vehicle is now \(a ? "armed" : "disarmed")"
+                lastResultOK = true
+            } else {
+                lastResult = "\(name(cmd)): no answer from vehicle"
+                lastResultOK = false
+            }
         }
     }
 }

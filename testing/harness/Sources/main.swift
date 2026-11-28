@@ -86,8 +86,8 @@ final class Ctx {
     func note(_ s: String) { print("NOTE \(s)") }
     func metric(_ k: String, _ v: Any) { print("METRIC \(k)=\(v)") }
 
-    /// What RootView passes to the HUD as `linkAlive` (RootView.swift:50). false => red NO HEARTBEAT banner.
-    var uiLinkAliveFlag: Bool { vehicle.heartbeatAlive || !link.state.isActive }
+    /// What RootView passes to the HUD as `linkAlive` (mirrors RootView after the BUG-001 fix). false => NO HEARTBEAT.
+    var uiLinkAliveFlag: Bool { vehicle.heartbeatAlive || vehicle.systemID == nil }
 
     func snapshot(_ tag: String) {
         let v = vehicle
