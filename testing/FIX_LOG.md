@@ -51,3 +51,5 @@ Code comments at each change are tagged `// BUG-0xx:`.
 | BUG-037 | Packets reach the UI in batches every 50 ms instead of one main-queue hop per datagram. | `catalyst.sh perf` |
 | BUG-038 | ManualControl treats non-finite stick values as centre. | `manual_control_rover/sub.sh` |
 | BUG-039 | ADS-B: only valid positions, at most 300 aircraft. | code + UI `test_Z7_…` |
+| BUG-033 (SITL) | Re-run against ArduCopter 4.7.3 SITL at 30 %/30 %/15 % loss: 3/3 uploads succeed (were 4/5 failing). | `sitl_lossy*.sh` PASS |
+| BUG-034 | New `tools/gen_param_meta_ardupilot.py` converts ArduPilot's own `apm.pdef.json` (generated from the Copter-4.7.3 source with `param_parse.py`) into the app's metadata JSON for Copter/Rover/Sub/Plane/Tracker. Coverage of a 4.7.3 SITL dump: 99.9 % (was 57.9 %). TESTING.md C3 and README now say `MAV6_` (4.7+) / `SR6_` (older). | `testing/tools/param_meta_coverage.py` |
