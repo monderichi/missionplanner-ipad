@@ -101,3 +101,28 @@ Code comments at each change are tagged `// BUG-0xx:`.
 |---|---|---|
 | 1 | The short ACK window after a resent predecessor (added for review 4) is removed. It cascaded: the next command's own fast ACK was ignored, so it was resent, which marked the following one as "after a resend", and so on (every later motor test or photo went out twice). Only the review-4 guard stays: an ACK can't resolve a queued command that hasn't been sent yet. Known limit, documented in the code: COMMAND_ACK has no request id, so a late duplicate ACK of the previous command can still resolve the next one once it is sent. | `test_BUG002_queueRecoversAfterLostAckAndTimeout` (6, 7, 8 go out once each after a lost ACK and after a timeout), `test_BUG002_duplicateAckDoesNotAcceptUnsentQueuedCommand` |
 | CI | The user has no GitHub Actions minutes left. The `break-test` job now runs only on a manual workflow run, and pushes from here on carry `[skip ci]`. All checks run locally. | unit 64/64, fake drone 86/86, SITL subset 3/3 |
+
+## Round 2 (branch `bug_fixes_2`, after the 0.5.0 merge)
+
+| Item | Change | Proof |
+|---|---|---|
+| BUG-019 | `LogDownloadSession(fileURL:)` writes each 90-byte chunk at its offset in a file (`FileHandle` seek + write), truncates to the real size at the short EOF chunk and ends with `.finishedFile(url, bytes:)`. RAM use is 1 byte per chunk instead of 2× the log. `LogStore` streams to `<name>.partial` and moves it into place on success; cancel, failure and detach delete the partial file. The 256 MB cap is replaced by a free-space check (keep 200 MB free). | `testFileBackedDownloadThroughLoss` (20 % loss, oversize LOG_ENTRY), `testFileBackedDownloadReportsUncreatableFile`, `log_download` + `sitl_log_download` (size matches, no `.partial` left) |
+| REVIEW_5 opt. 3 | Quiet `requestMessage` results are counted per id instead of a set, so overlapping requests never show a "Request message: accepted" banner; reset on link change. | code (harness scenarios) |
+| REVIEW_5 opt. 2 | The one-item fence/rally tests also require the read-back failure ("differs"), so a hang can't pass them. | `testSingleFenceCircleAndRadiusChangeAreVerified`, `testSingleRallyPointMoveIsVerified` |
+
+Verified: unit 66/66, fake drone 86/86, SITL `sitl_log_download`, `sitl_arm`, `sitl_mission_roundtrip`.
+
+Review R2-1 (`testing/REVIEW_R2_1.md`): **APPROVED**; its optional items were applied too:
+- A zero-size log finishes at once ("is empty: nothing to save"; handle closed, partial deleted): `testFileBackedZeroSizeLogEndsAtOnce`.
+- An existing `.bin` is replaced in one step (`replaceItemAt`).
+- Leftover `*.partial` files from a killed run are swept on attach.
+- A start error deletes the partial file.
+- Background (quiet) requests don't get a red "link changed" banner.
+
+BUG-037 (still PARTIAL): UI batches now publish at 10 Hz (was 20 Hz), and `messageCounts` (changes on every packet) is
+no longer `@Published`. Measured with `testing/sim/catalyst.sh perf BreakTestUITests2/test_perf_highRateAndFlood`
+(after the user approved macOS UI automation): avg CPU **34 % → 29 %** (50 Hz phase 34 → 26 %, STATUSTEXT flood 34 → 32 %),
+RSS flat (322 → 321 MB; before +24 MB). Target < 15 % not reached: the remaining cost is re-rendering the whole view tree per
+batch (next step: split VehicleModel into smaller ObservableObjects so the map/status don't redraw with the HUD).
+
+Verified after these: unit 67/67, fake drone 86/86, SITL `sitl_log_download` + `sitl_arm` 2/2.

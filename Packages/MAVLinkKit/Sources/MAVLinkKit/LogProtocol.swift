@@ -91,6 +91,8 @@ public final class LogDownloadSession {
     public enum Event: Equatable {
         case progress(received: Int, total: Int)
         case finished(Data)
+        /// BUG-019: file-backed session (`fileURL` given): the log is complete in that file.
+        case finishedFile(URL, bytes: Int)
         case failed(String)
     }
 
@@ -106,6 +108,10 @@ public final class LogDownloadSession {
     public var maxStalls = 15
 
     private var buffer: [UInt8]
+    /// BUG-019: when set, chunks are written at their offset in this file instead of being kept in RAM
+    /// (the in-memory buffer stays empty; `have` costs 1 byte per 90-byte chunk).
+    public let fileURL: URL?
+    private var file: FileHandle?
     private var have: [Bool]
     private var size: Int
     private var receivedBytes = 0
@@ -114,12 +120,13 @@ public final class LogDownloadSession {
     private var progressSinceTick = false
     public private(set) var active = false
 
-    public init(entry: LogEntryInfo, targetSystem: UInt8, targetComponent: UInt8 = 1) {
+    public init(entry: LogEntryInfo, targetSystem: UInt8, targetComponent: UInt8 = 1, fileURL: URL? = nil) {
         self.entry = entry
         self.targetSystem = targetSystem
         self.targetComponent = targetComponent
+        self.fileURL = fileURL
         size = Int(entry.size)
-        buffer = [UInt8](repeating: 0, count: size)
+        buffer = fileURL == nil ? [UInt8](repeating: 0, count: size) : []
         have = [Bool](repeating: false, count: (size + Self.chunk - 1) / Self.chunk)
     }
 
@@ -128,16 +135,36 @@ public final class LogDownloadSession {
     public func start(now: TimeInterval) -> [MAVLinkMessage] {
         active = true
         lastActivity = now
+        if let url = fileURL {
+            // An empty file of the final size; chunks are written in place as they arrive (any order).
+            guard FileManager.default.createFile(atPath: url.path, contents: nil),
+                  let h = try? FileHandle(forWritingTo: url) else {
+                active = false
+                startError = "Can't create \(url.lastPathComponent)"
+                return []
+            }
+            file = h
+        }
         if size == 0 {
             active = false
+            closeFile() // review R2-1: nothing to download; don't keep the handle open
             return [end()]
         }
         return [request(ofs: 0, count: size)]
     }
 
+    /// Set when `start` couldn't open the file (no messages are sent then).
+    public private(set) var startError: String?
+
     public func cancel() -> [MAVLinkMessage] {
         active = false
+        closeFile()
         return [end()]
+    }
+
+    private func closeFile() {
+        try? file?.close()
+        file = nil
     }
 
     private func request(ofs: Int, count: Int) -> MAVLinkMessage {
@@ -157,14 +184,25 @@ public final class LogDownloadSession {
         if n < Self.chunk && ofs + n < size {
             size = ofs + n
             have = Array(have.prefix((size + Self.chunk - 1) / Self.chunk))
-            buffer = Array(buffer.prefix(size))
+            if fileURL == nil { buffer = Array(buffer.prefix(size)) }
         }
         guard ofs % Self.chunk == 0, ofs < size || (n == 0 && ofs == size) else { return ([], []) }
         if n > 0 {
             let idx = ofs / Self.chunk
             if idx < have.count && !have[idx] {
                 let len = min(n, size - ofs)
-                for k in 0..<len { buffer[ofs + k] = d.data[k] }
+                if let file {
+                    do {
+                        try file.seek(toOffset: UInt64(ofs))
+                        try file.write(contentsOf: Data(d.data.prefix(len)))
+                    } catch {
+                        active = false
+                        closeFile()
+                        return ([end()], [.failed("Write failed: \(error.localizedDescription)")])
+                    }
+                } else {
+                    for k in 0..<len { buffer[ofs + k] = d.data[k] }
+                }
                 have[idx] = true
                 receivedBytes += len
                 stalls = 0
@@ -173,6 +211,11 @@ public final class LogDownloadSession {
         }
         if !have.contains(false) {
             active = false
+            if let file, let url = fileURL {
+                do { try file.truncate(atOffset: UInt64(size)) } catch {} // the log may be shorter than LOG_ENTRY said
+                closeFile()
+                return ([end()], [.finishedFile(url, bytes: size)])
+            }
             return ([end()], [.finished(Data(buffer))])
         }
         return ([], [.progress(received: receivedBytes, total: size)])
@@ -196,6 +239,7 @@ public final class LogDownloadSession {
         progressSinceTick = false
         if stalls > maxStalls {
             active = false
+            closeFile()
             return ([end()], [.failed("No data from vehicle (\(receivedBytes) of \(size) bytes)")])
         }
         guard let gap = firstGap() else { return ([], []) }

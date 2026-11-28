@@ -1,0 +1,24 @@
+## Break-test round 2: BUG-019 DataFlash streaming + review leftovers
+
+Follow-up to PR #1 (0.5.0). Details: `testing/FIX_LOG.md` section "Round 2".
+
+- **BUG-019 (was PARTIAL, now fixed):** DataFlash logs download straight to `<name>.partial` on disk, chunk by chunk,
+  and are moved into place when complete. RAM use no longer grows with the log size, the 256 MB cap is replaced by a
+  free-space check, and unfinished files are deleted on cancel, failure or link change.
+- Overlapping background `REQUEST_MESSAGE` commands no longer show a stray "Request message: accepted" banner
+  (REVIEW_5 optional 3).
+- The one-item fence/rally tests now require the read-back failure itself (REVIEW_5 optional 2).
+- Review R2-1 (**APPROVED**) optional items: empty logs finish at once, an existing `.bin` is replaced atomically,
+  leftover `.partial` files are swept, no red banner for background requests.
+- BUG-037 (still partial): UI updates batched at 10 Hz instead of 20 Hz; per-packet message counters no longer
+  trigger SwiftUI updates. Mac Catalyst perf test: avg CPU 34 % → 29 %, memory flat under load (was +24 MB); target < 15 %.
+
+### How it was tested (locally; no GitHub Actions minutes, so pushes carry `[skip ci]`)
+| Check | Result |
+|---|---|
+| MAVLinkKit unit tests (`testing/unit/run_unit_tests.sh`) | 67/67 |
+| Headless app vs fake drone (`run.py -j 4 all`) | 86/86 |
+| Review R2-1 / R2-2 | APPROVED / APPROVED |
+| ArduCopter 4.7.3 SITL: `sitl_log_download`, `sitl_arm`, `sitl_mission_roundtrip` | 3/3 (log size matches, no `.partial` left) |
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)

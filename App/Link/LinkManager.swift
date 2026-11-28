@@ -389,7 +389,9 @@ final class LinkManager: ObservableObject {
         }
     }
 
-    static let uiBatchInterval: TimeInterval = 0.05
+    /// BUG-037 (round 2): UI snapshots at 10 Hz (was 20 Hz). Every batch re-renders the whole HUD/map/status tree;
+    /// 10 Hz is what the bug's fix asked for and still smooth for an attitude display.
+    static let uiBatchInterval: TimeInterval = 0.1
 
     /// Main queue: route a batch of packets to the model and the protocol sessions.
     private func apply(_ packets: [MAVLinkPacket]) {

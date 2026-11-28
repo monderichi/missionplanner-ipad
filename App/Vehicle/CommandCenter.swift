@@ -24,9 +24,10 @@ final class CommandCenter: ObservableObject {
 
     /// BUG-027: a session replaced/removed while commands were in flight: say so instead of "Arming…" forever.
     private func abandonPending() {
-        defer { labelQueue = [:]; sentAt = [:] }
-        if let s = session, !s.pendingCommands.isEmpty {
-            lastResult = "\(name(s.pendingCommands[0])): link changed, not confirmed"
+        defer { labelQueue = [:]; sentAt = [:]; quiet = [:] }
+        // review R2-1: background (quiet) requests such as HOME_POSITION don't get a red banner
+        if let s = session, let cmd = s.pendingCommands.first(where: { quiet[$0] == nil }) {
+            lastResult = "\(name(cmd)): link changed, not confirmed"
             lastResultOK = false
         }
     }
@@ -147,14 +148,14 @@ final class CommandCenter: ObservableObject {
         guard let session else { return }
         session.send(MAVCmd.requestMessage, params: [Float(id)], now: now).forEach { send?($0) }
         names[MAVCmd.requestMessage] = "Request message"
-        quiet.insert(MAVCmd.requestMessage)
+        quiet[MAVCmd.requestMessage, default: 0] += 1 // review 5: count, so overlapping requests all stay quiet
         refreshPending()
     }
 
     private var names: [UInt16: String] = [:]
     private var untracked: Set<UInt16> = []
     /// Commands whose results aren't worth a banner (background requests).
-    private var quiet: Set<UInt16> = []
+    private var quiet: [UInt16: Int] = [:] // outstanding quiet results per command id
 
     func handle(_ ack: MAV.CommandAck) {
         if quietAcks.contains(ack.command) && session?.pendingCommands.contains(ack.command) != true {
@@ -214,10 +215,11 @@ final class CommandCenter: ObservableObject {
 
     private func applyResult(_ e: CommandSession.Event) {
         switch e {
-        case .accepted(let cmd) where quiet.contains(cmd),
-             .rejected(let cmd, _) where quiet.contains(cmd),
-             .timedOut(let cmd) where quiet.contains(cmd):
-            quiet.remove(cmd)
+        case .accepted(let cmd) where quiet[cmd] != nil,
+             .rejected(let cmd, _) where quiet[cmd] != nil,
+             .timedOut(let cmd) where quiet[cmd] != nil:
+            let left = (quiet[cmd] ?? 1) - 1
+            quiet[cmd] = left > 0 ? left : nil
             return
         case .accepted(let cmd):
             lastResult = "\(name(cmd)): accepted"
