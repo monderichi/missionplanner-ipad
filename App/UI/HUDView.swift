@@ -159,6 +159,9 @@ struct HUDView: View {
             }
         }
         .background(Color.black)
+        // BUG-003: never Int() a telemetry Double directly (NaN/Inf/huge values trapped here on every render).
+        // Applied to the Canvas only, so the banner overlays below stay separate accessibility elements (TEST-031).
+        .accessibilityLabel("Artificial horizon: roll \(Self.whole(roll)), pitch \(Self.whole(pitch)), heading \(Self.whole(heading))")
         .overlay(alignment: .bottom) {
             // BUG-008 / TEST-031: a real view (not Canvas drawing) so it is readable by VoiceOver and XCUITest.
             if let warning {
@@ -181,8 +184,6 @@ struct HUDView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 10))
-        // BUG-003: never Int() a telemetry Double directly (NaN/Inf/huge values trapped here on every render).
-        .accessibilityLabel("Artificial horizon: roll \(Self.whole(roll)), pitch \(Self.whole(pitch)), heading \(Self.whole(heading))")
     }
 
     /// BUG-003: whole degrees for labels; non-finite → 0, clamped so Int() can't trap.

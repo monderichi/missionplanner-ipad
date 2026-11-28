@@ -7,7 +7,8 @@ metadata generated from the exact firmware source instead.
 1. In an ArduPilot checkout at the release tag (e.g. testing/.sitl/ardupilot at Copter-4.7.3; needs `pip install lxml`):
      python Tools/autotest/param_metadata/param_parse.py --vehicle ArduCopter --format json   # → apm.pdef.json
    (repeat for Rover, ArduSub, ArduPlane, AntennaTracker in separate folders)
-2. python3 -I tools/gen_param_meta_ardupilot.py <dir with ArduCopter/ Rover/ ArduSub/ ArduPlane/ AntennaTracker/>
+2. python3 -I tools/gen_param_meta_ardupilot.py <dir with ArduCopter/ Rover/ ArduSub/ ArduPlane/ AntennaTracker/> [<dir of previous JSON>]
+   The optional second folder keeps names that only older firmware has (ARMING_CHECK, SRn_*, …).
 
 Output keys (same as tools/gen_param_meta.py, read by App/Vehicle/ParamMetadata.swift):
   n display name, d description, u units, r [min, max], i increment, v [[code, label]], b [[bit, label]],
@@ -84,6 +85,16 @@ def main():
                 name = name.split(":")[-1]  # some generators prefix the vehicle ("ArduCopter:NAME")
                 out[name] = convert(p)
         dst = os.path.join(OUT, f"{firmware}.json")
+        # Keep entries of the previous metadata for names this release no longer has (older firmware still uses them,
+        # e.g. ARMING_CHECK before 4.7's ARMING_SKIPCHK, SRn_* before MAVn_*). New release data wins for shared names.
+        legacy = sys.argv[2] if len(sys.argv) > 2 else None
+        if legacy:
+            old_path = os.path.join(legacy, f"{firmware}.json")
+            if os.path.exists(old_path):
+                old = json.load(open(old_path, encoding="utf-8"))
+                kept = {k: v for k, v in old.items() if k not in out}
+                out.update(kept)
+                print(f"  kept {len(kept)} legacy names from {os.path.relpath(old_path)}")
         with open(dst, "w", encoding="utf-8") as f:
             json.dump(dict(sorted(out.items())), f, ensure_ascii=False, separators=(",", ":"))
         print(f"{firmware}: {len(out)} parameters -> {os.path.relpath(dst)}")

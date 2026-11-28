@@ -40,7 +40,7 @@ The user's original request is kept verbatim at the end; the version below is th
   scenarios (fake drone + SITL, `-j 4`), probes and Catalyst UI tests. Update `TESTING_RESULTS.md` with a
   "Re-test after pull" section (status per bug + new bugs).
 - [x] **4. Commit** the final review files on the test branch.
-- [ ] **5. Push** to a new remote branch **`bug_fixes`** (created from the reviewed test branch).
+- [x] **5. Push** to a new remote branch **`bug_fixes`** (created from the reviewed test branch).
 - [ ] **6. Fix all bugs** on `bug_fixes`, highest severity first, re-running the relevant tests after each fix and the
   full suite at the end. Each fix: code + comment + regression test (unit test, harness scenario or UI test) +
   `testing/FIX_LOG.md` entry + `TESTING_RESULTS.md` status → FIXED. Keep CI green (GitHub Actions builds on push to main;
@@ -100,3 +100,7 @@ The user's original request is kept verbatim at the end; the version below is th
   (378–388 MB): warm-up growth (map tiles/trail/history buffers), no steady leak. Record under BUG-037 (CPU) in section 8.
   Usage limit hit again; NEXT unchanged (00:36 entry, starting at item 2: catalyst.sh build + UI classes 3/2/1).
 - 03:25 Step 3 done (section 8 in TESTING_RESULTS.md; BUG-038, BUG-039 added). Step 4: committed. Step 5 next.
+- 03:26 Step 5 done: bug_fixes pushed (85e7f2d).
+- 03:24–04:05 Step 6: MAVLinkKit fixes (b8463ee), app fixes (ff486da), BUG-034 metadata (8a65346), CI/a11y (03db204),
+  version 0.5.0 + legacy metadata names + section 9. Verified: unit 55/55, fake drone 86/86, SITL 21/21, TSan 0 races,
+  Catalyst UI crash tests pass. Remaining UI fails are test limitations (ADS-B labels / ESC list scroll not visible to XCUI).

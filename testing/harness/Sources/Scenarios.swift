@@ -53,7 +53,8 @@ enum Scenarios {
             c.check("C1 count matches vehicle", c.link.params.params.count == expected, "\(c.link.params.params.count) vs \(expected)")
         }
         c.note("banner: \(c.link.params.banner ?? "nil")")
-        c.check("C4 metadata loaded for FRAME_CLASS", c.waitUntil(5) { c.link.params.metadata["FRAME_CLASS"] != nil } != nil,
+        c.check("C4 metadata loaded (FRAME_CLASS; ArduSub: FRAME_CONFIG)",
+                c.waitUntil(5) { c.link.params.metadata["FRAME_CLASS"] != nil || c.link.params.metadata["FRAME_CONFIG"] != nil } != nil,
                 "meta=\(c.link.params.metadata.count)")
     }
 
@@ -963,7 +964,8 @@ enum Scenarios {
         c.pump(3)
         // MANUAL with zero throttle coasts (ArduRover), so only "slowing down" is expected, not an immediate stop
         c.check("sticks released: neutral frame sent and the vehicle slows", m.frame == ManualControl.Frame(x: 0, y: 0, z: isSub ? 500 : 0, r: 0)
-                && c.vehicle.groundspeed < gsDriving, "gs \(gsDriving) -> \(c.vehicle.groundspeed) frame=\(m.frame)")
+                && (isSub || c.vehicle.groundspeed < gsDriving), // an ROV drifts on after neutral; only the frame is checked
+                "gs \(gsDriving) -> \(c.vehicle.groundspeed) frame=\(m.frame)")
         m.setEnabled(false)
         c.link.commands.arm(false, force: true)
         c.waitUntil(5) { !c.vehicle.armed }

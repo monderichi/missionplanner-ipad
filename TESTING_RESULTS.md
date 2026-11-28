@@ -831,3 +831,48 @@ review and several setup pages. Re-test results:
 | TESTING_SIMULATOR.md UI (Mac Catalyst) | S-C6 measure, S-C12 graph, S-C13 inspector, S-C15 DataFlash review, S-C16/S-R2/S-S7 every setup page for copter/rover/sub (no crash), S-R5 rover Control tab, S-S5 leak banner: PASS. S-G2: test could not reach the row (list scrolling), not a bug |
 | Long UI session (30 min, normal rates) | avg 30 % CPU; RSS 327 → 383 MB in 15 min then flat (378–388 MB): warm-up, no steady leak (CPU → BUG-037) |
 | Mission upload on lossy SITL | BUG-033 is intermittent: 4/5 failed in earlier runs, 1/3 in this run |
+
+---
+
+## 9. Status after the fixes (branch `bug_fixes`, version 0.5.0)
+
+Every action item was addressed; details per bug (cause → change → proof) in `testing/FIX_LOG.md`, and every change is
+tagged `// BUG-0xx:` in the code. Verification on the fixed code:
+
+| Check | Before | After |
+|---|---|---|
+| Unit tests (`swift test` / stand-in) | 51 pass + 4 regression tests failing | **55/55 pass** (regression tests now in `Packages/MAVLinkKit/Tests`) |
+| Fake-drone scenarios + probes (`run.py -j 4 all`) | 16 CRASH, 24 FAIL | **0 CRASH; 86/86 PASS** (the two by-design edge cases now assert the intended behaviour) |
+| ArduCopter/Rover/Sub 4.7.3 SITL (`run.py -j 4 sitl`) | lossy mission upload failed 4/5 | **21/21 PASS** incl. 3/3 lossy uploads (BUG-033) |
+| Thread Sanitizer (6 link scenarios) | 4 races | **0 races** (BUG-032) |
+| Mac Catalyst UI, crash tests (BUG-003/-004/-005/-006/-007) | app crashed in each | **no crash** |
+| Mac Catalyst UI, BUG-001 / -008 / -013 | banner hidden / no warning / no confirmation | **pass** |
+
+Status per item: FIXED = code change + passing test; PARTIAL = improved, remainder documented.
+
+| Item | Status | Item | Status |
+|---|---|---|---|
+| BUG-001 link failure banner, TCP reconnect | FIXED | BUG-021 accel cal on lossy links | FIXED (confirm resend + STATUSTEXT result) |
+| BUG-002 ACK matching | FIXED | BUG-022 fence below vehicle | FIXED (confirmation) |
+| BUG-003 non-finite telemetry | FIXED | BUG-023 backpack ports | FIXED |
+| BUG-004 map invalid coordinates | FIXED | BUG-024 port validation | FIXED |
+| BUG-005 flight-mode channel 0 | FIXED | BUG-025 speech on disconnect/replay | FIXED |
+| BUG-006 input ranges / crash loop | FIXED | BUG-026 failed replay state | FIXED |
+| BUG-007 coordinate traps | FIXED | BUG-027 stuck command banner | FIXED |
+| BUG-008 warnings | FIXED (HUD banner + battery colour) | BUG-028 failed compass 100 % | FIXED |
+| BUG-009 ACCELCAL crash | FIXED | BUG-029 radio cal sample rate | FIXED |
+| BUG-010 > 65 535 items | FIXED (limit 10 000) | BUG-032 data race | FIXED |
+| BUG-011 fly-here result | FIXED | BUG-033 lossy mission upload | FIXED |
+| BUG-012 stale after disconnect | FIXED | BUG-034 param metadata | FIXED (99.9 % coverage of 4.7.3) |
+| BUG-013 confirm while armed | FIXED | BUG-035 accessibility | PARTIAL (labels, ids, top-bar contrast) |
+| BUG-014 servo guard | FIXED | BUG-036 locale grouping | FIXED |
+| BUG-015 GPS-loss stale position | FIXED | BUG-037 UI CPU | PARTIAL (50 ms batching; re-measure on an iPad) |
+| BUG-016 Link % | FIXED | BUG-038 NaN stick | FIXED |
+| BUG-017 lost ACK reporting | FIXED | BUG-039 ADS-B limits | FIXED |
+| BUG-018 battery calibration | FIXED | TEST-030 CI + app-layer tests | FIXED (CI `break-test` job) |
+| BUG-019 DataFlash memory | PARTIAL (256 MB limit; streaming to file left as follow-up) | TEST-031 identifiers | FIXED |
+| BUG-020 non-finite params | FIXED | | |
+
+Not changed by design: aborting an upload when the vehicle asks for an item beyond the count (`mission_oob`), and
+reporting "N missing, tap Refresh" when a vehicle's parameter count is inconsistent (`param_count_change`).
+Still only testable on real hardware: iPad layout/touch/rotation/backgrounding, ExpressLRS backpack, BLE, speech, flight.

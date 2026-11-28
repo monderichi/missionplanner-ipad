@@ -40,7 +40,7 @@ also attach the diagnostics report and the telemetry log (see "How to send feedb
 | ID | Steps | Expected |
 |---|---|---|
 | A1 | Install the `.ipa` with Sideloadly. On the iPad, trust the Apple ID (*Settings â€º General â€º VPN & Device Management*); enable Developer Mode if asked. | The app icon appears and the app opens in landscape, showing the Connect sheet. |
-| A2 | Tap â“˜ in the top bar. | Diagnostics shows a version like `0.4.0 (build N, abc1234)`. Write the build number in your report. |
+| A2 | Tap â“˜ in the top bar. | Diagnostics shows a version like `0.5.0 (build N, abc1234)`. Write the build number in your report. |
 | A3 | Open the Files app â€º *On My iPad* â€º *Mission Planner*. | Folders `logs`, `params`, `missions` and `tiles` exist. |
 
 ## B. Connection and live data
