@@ -11,8 +11,11 @@ import MAVLinkKit
 @inline(never) func opaque<T>(_ x: T) -> T { x }
 
 enum Probes {
-    /// Built entry by entry: as one dictionary literal of closures it exceeded the CI compiler's type-check budget.
-    static let all: [String: (Ctx) -> Void] = {
+    /// Built entry by entry in a function: as one dictionary literal (or one immediately-invoked closure) of closures it
+    /// exceeded the CI compiler's type-check budget; function bodies are type-checked statement by statement.
+    static let all: [String: (Ctx) -> Void] = makeAll()
+
+    private static func makeAll() -> [String: (Ctx) -> Void] {
         var d = [String: (Ctx) -> Void]()
         // real app/MAVLinkKit code
         d["probe:accelcal_nan"] = { (c: Ctx) in accel(c, .nan) }
@@ -155,7 +158,7 @@ enum Probes {
                     "events=\(ev) pending=\(s.pendingCommands) resent=\(r.messages.count)")
         }
         return d
-    }()
+    }
 
     static func accel(_ c: Ctx, _ p1: Float) {
         let cal = CalibrationStore()
