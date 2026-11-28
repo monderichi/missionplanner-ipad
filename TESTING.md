@@ -40,7 +40,7 @@ also attach the diagnostics report and the telemetry log (see "How to send feedb
 | ID | Steps | Expected |
 |---|---|---|
 | A1 | Install the `.ipa` with Sideloadly. On the iPad, trust the Apple ID (*Settings â€º General â€º VPN & Device Management*); enable Developer Mode if asked. | The app icon appears and the app opens in landscape, showing the Connect sheet. |
-| A2 | Tap â“˜ in the top bar. | Diagnostics shows a version like `0.4.0 (build N, abc1234)`. Write the build number in your report. |
+| A2 | Tap â“˜ in the top bar. | Diagnostics shows a version like `0.5.0 (build N, abc1234)`. Write the build number in your report. |
 | A3 | Open the Files app â€º *On My iPad* â€º *Mission Planner*. | Folders `logs`, `params`, `missions` and `tiles` exist. |
 
 ## B. Connection and live data
@@ -60,7 +60,7 @@ also attach the diagnostics report and the telemetry log (see "How to send feedb
 |---|---|---|
 | C1 | Top bar â€º **Params**. | All parameters download (progress top right; up to ~1 min over ExpressLRS). Count matches desktop Mission Planner. |
 | C2 | Tap **Save**. | A `.param` file appears in Files â€º Mission Planner â€º params. |
-| C3 | Search `SR6_` (or any group); open one; change it slightly; **Write to vehicle**; then set it back. | The banner confirms the value the flight controller stored. |
+| C3 | Search `MAV6_` (ArduPilot 4.7+; `SR6_` on older firmware) or any group; open one; change it slightly; **Write to vehicle**; then set it back. | The banner confirms the value the flight controller stored. |
 | C4 | Open a parameter with a list (e.g. `FRAME_CLASS`) and one with checkboxes (e.g. `ARMING_CHECK`). | Options and bit names are shown with descriptions. **Don't write unless you mean it.** |
 | C5 | **Load** the file from C2. | "0 differ" (or only the values you changed). |
 

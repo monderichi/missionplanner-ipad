@@ -130,7 +130,7 @@ struct ServoView: View {
                     HStack {
                         Text("Out \(ch)").font(.callout.bold()).frame(width: 56, alignment: .leading)
                         ProgressView(value: Double(min(max(Int(out), 800), 2200) - 800), total: 1400)
-                        Text(out > 0 ? "\(out)" : "—").monospacedDigit().frame(width: 44, alignment: .trailing)
+                        Text(verbatim: out > 0 ? String(out) : "—") /* BUG-036 */.monospacedDigit().frame(width: 44, alignment: .trailing)
                     }
                     HStack {
                         Text(function(ch) ?? "").font(.caption2).foregroundColor(.secondary).lineLimit(1)
@@ -168,8 +168,11 @@ struct ServoView: View {
 
     /// SERVOn_FUNCTION 33..40 = Motor1..8, 82..85 = Motor9..12: never offer overrides on those.
     private func isMotor(_ ch: Int) -> Bool {
-        guard let f = params.params["SERVO\(ch)_FUNCTION"]?.value else { return false }
-        return (33...40).contains(Int(f)) || (82...85).contains(Int(f))
+        // BUG-014: unknown (parameters not downloaded yet) counts as a motor: block until we know.
+        guard let f = params.params["SERVO\(ch)_FUNCTION"]?.value else { return true }
+        guard f.isFinite else { return true }
+        let fn = Int(max(-1_000_000, min(1_000_000, f.rounded()))) // review 2: Int(1e20) would trap
+        return (33...40).contains(fn) || (82...85).contains(fn)
     }
 }
 
@@ -187,7 +190,7 @@ struct ESCStatusSection: View {
                         HStack {
                             Text("Motor \(i + 1)")
                             Spacer()
-                            Text("\(e.rpm) rpm · \(e.temperature) °C · \(String(format: "%.1f V %.1f A", e.voltage, e.current))")
+                            Text(verbatim: "\(e.rpm) rpm · \(e.temperature) °C · \(String(format: "%.1f V %.1f A", e.voltage, e.current))") // BUG-036
                                 .foregroundColor(e.temperature > 80 ? .red : .secondary).monospacedDigit()
                         }
                     }

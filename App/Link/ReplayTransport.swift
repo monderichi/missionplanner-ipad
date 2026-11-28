@@ -21,6 +21,11 @@ final class ReplayController: ObservableObject {
     func playPause() { transport?.setPlaying(!playing) }
     func seek(to fraction: Double) { transport?.seek(fraction) }
 
+    /// BUG-026: cleared when a new file is opened (a failed open used to keep the previous file's name/length).
+    fileprivate func reset() {
+        fileName = ""; loaded = false; playing = false; position = 0; elapsed = 0; duration = 0; packetCount = 0
+    }
+
     fileprivate func update(playing: Bool, elapsed: TimeInterval, duration: TimeInterval) {
         self.playing = playing
         self.elapsed = elapsed
@@ -71,6 +76,7 @@ final class ReplayTransport: MAVTransport {
         queue.async {
             let scoped = self.url.startAccessingSecurityScopedResource()
             defer { if scoped { self.url.stopAccessingSecurityScopedResource() } }
+            DispatchQueue.main.async { self.controller.reset() } // BUG-026: don't show the previous file's data
             do {
                 let reader = try TLogReader(url: self.url)
                 self.records = Array(reader)

@@ -176,6 +176,8 @@ struct SetupView: View {
                     } label: {
                         Label(p.rawValue, systemImage: p.icon).fontWeight(page == p ? .bold : .regular)
                     }
+                    .accessibilityLabel(p.rawValue) // BUG-035: the SF Symbol name ("battery.75") was read aloud
+                    .accessibilityIdentifier("setup.\(p.rawValue)") // TEST-031
                     .listRowBackground(page == p ? Color.accentColor.opacity(0.15) : Color.clear)
                 }
             }
@@ -441,6 +443,7 @@ struct CompassPage: View {
 struct RadioPage: View {
     @EnvironmentObject var vehicle: VehicleModel
     @EnvironmentObject var params: ParameterStore
+    @EnvironmentObject var commands: CommandCenter // BUG-029
     @State private var capturing = false
     @State private var mins: [UInt16] = Array(repeating: 2200, count: 18)
     @State private var maxs: [UInt16] = Array(repeating: 800, count: 18)
@@ -460,9 +463,9 @@ struct RadioPage: View {
                     HStack {
                         Text("CH\(i + 1)").frame(width: 46, alignment: .leading).monospacedDigit()
                         ProgressView(value: Double(min(max(Int(v), 800), 2200) - 800), total: 1400)
-                        Text(v == 0 || v == UInt16.max ? "—" : "\(v)").frame(width: 50, alignment: .trailing).monospacedDigit()
+                        Text(verbatim: v == 0 || v == UInt16.max ? "—" : String(v)) /* BUG-036: no locale grouping ("1.500") */ .frame(width: 50, alignment: .trailing).monospacedDigit()
                         if capturing && maxs[i] > mins[i] {
-                            Text("\(mins[i])–\(maxs[i])").font(.caption).frame(width: 90).monospacedDigit()
+                            Text(verbatim: "\(mins[i])–\(maxs[i])") /* BUG-036 */.font(.caption).frame(width: 90).monospacedDigit()
                         }
                     }
                 }
@@ -481,7 +484,7 @@ struct RadioPage: View {
                     Text("Move all sticks and switches to their full extents, then centre the sticks and put throttle down.")
                     Button { save() } label: { Label("Save calibration", systemImage: "checkmark.circle.fill") }
                         .buttonStyle(.borderedProminent)
-                    Button("Cancel", role: .cancel) { capturing = false }
+                    Button("Cancel", role: .cancel) { capturing = false; setRCRate(capturing: false) }
                 }
                 if let m = message { Text(m).font(.caption) }
             }
@@ -495,7 +498,14 @@ struct RadioPage: View {
         }
     }
 
+    /// BUG-029: during capture ask for RC_CHANNELS (id 65) at 10 Hz (narrow links stream it at 1 Hz, so stick extremes
+    /// were missed); restore the default rate (interval 0) when done.
+    private func setRCRate(capturing on: Bool) {
+        commands.sendQuiet(MAVCmd.setMessageInterval, params: [65, on ? 100_000 : 0])
+    }
+
     private func start() {
+        setRCRate(capturing: true)
         mins = Array(repeating: 2200, count: 18)
         maxs = Array(repeating: 800, count: 18)
         message = nil
@@ -503,6 +513,7 @@ struct RadioPage: View {
     }
 
     private func save() {
+        setRCRate(capturing: false)
         let throttleCh = Int(params.params["RCMAP_THROTTLE"]?.value ?? 3)
         var out: [String: Float] = [:]
         for i in 0..<channels where maxs[i] > mins[i] && maxs[i] - mins[i] > 300 {
@@ -533,7 +544,11 @@ struct FlightModesPage: View {
     private var isRover: Bool { MAVType(rawValue: vehicle.vehicleType)?.firmware == .rover }
     private var prefix: String { isRover ? "MODE" : "FLTMODE" }
     private var channelParam: String { isRover ? "MODE_CH" : "FLTMODE_CH" }
-    private var channel: Int { Int(params.params[channelParam]?.value ?? (isRover ? 8 : 5)) }
+    /// BUG-005: 0 = "Disabled" is a valid value (it indexed rcChannels[-1]); non-finite values must not trap either.
+    private var channel: Int {
+        let v = params.params[channelParam]?.value ?? (isRover ? 8 : 5)
+        return v.isFinite ? Int(max(0, min(32, v.rounded()))) : 0
+    }
 
     private var activeSlot: Int? {
         guard channel >= 1 && channel <= vehicle.rcChannels.count else { return nil }
@@ -557,7 +572,8 @@ struct FlightModesPage: View {
         Form {
             Section {
                 LabeledContent("Mode switch channel", value: "CH\(channel) (\(channelParam))")
-                LabeledContent("Current PWM", value: channel <= vehicle.rcChannels.count ? "\(vehicle.rcChannels[channel - 1])" : "—")
+                LabeledContent("Current PWM", value: channel == 0 ? "Mode switch disabled"
+                    : (channel <= vehicle.rcChannels.count ? String(vehicle.rcChannels[channel - 1]) : "—")) // BUG-005, BUG-036
                 LabeledContent("Current mode", value: vehicle.modeName)
             }
             Section("Switch positions") {
@@ -568,7 +584,7 @@ struct FlightModesPage: View {
                             Text("Position \(slot)").fontWeight(activeSlot == slot ? .bold : .regular)
                             if activeSlot == slot { Image(systemName: "arrowtriangle.left.fill").foregroundColor(.green) }
                             Spacer()
-                            Picker(name, selection: Binding(get: { UInt32(p.value) }, set: { params.set(name, Float($0)) })) {
+                            Picker(name, selection: Binding(get: { UInt32(exactly: p.value.rounded()) ?? 0 }, set: { params.set(name, Float($0)) })) { // BUG-005
                                 ForEach(modes.indices, id: \.self) { i in Text(modes[i].1).tag(modes[i].0) }
                             }
                             .pickerStyle(.menu)
@@ -702,6 +718,7 @@ struct MotorTestPage: View {
 struct FencePage: View {
     @EnvironmentObject var params: ParameterStore
     @State private var quickAlt = 120.0
+    @State private var confirmBelowVehicle = false // BUG-022
 
     @EnvironmentObject var vehicle: VehicleModel
 
@@ -731,9 +748,17 @@ struct FencePage: View {
                         Text("m above home")
                     }
                     Button {
-                        limitAltitude()
+                        // BUG-022: a limit at or below the current height breaches at once (RTL/Land) when armed.
+                        if vehicle.armed && quickAlt < vehicle.relativeAltitude + 10 { confirmBelowVehicle = true } else { limitAltitude() }
                     } label: {
                         Label("Apply altitude limit", systemImage: "arrow.up.to.line")
+                    }
+                    .alert("Fence below the vehicle", isPresented: $confirmBelowVehicle) {
+                        Button("Apply anyway", role: .destructive) { limitAltitude() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text(String(format: "The vehicle is armed at %.0f m. A %.0f m altitude fence breaches immediately and triggers the fence action (RTL or Land).",
+                                    vehicle.relativeAltitude, quickAlt))
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(quickAlt < 10 || quickAlt > 1000)
@@ -883,6 +908,7 @@ struct BatteryPage: View {
     @State private var measuredVolts = 0.0
     @State private var measuredAmps = 0.0
     @State private var note: String?
+    @State private var pendingCal: (name: String, old: Float, new: Double, ratio: Double)? // BUG-018
 
     var body: some View {
         Form {
@@ -924,21 +950,34 @@ struct BatteryPage: View {
             ParamAutoRow(name: "BATT_AMP_PERVLT")
             ParamAutoRow(name: "BATT_AMP_OFFSET")
         }
+        .alert("Large calibration change", isPresented: Binding(get: { pendingCal != nil }, set: { if !$0 { pendingCal = nil } })) {
+            Button("Apply", role: .destructive) { if let c = pendingCal { apply(c.name, old: c.old, new: c.new) }; pendingCal = nil }
+            Button("Cancel", role: .cancel) { pendingCal = nil }
+        } message: {
+            Text(String(format: "This changes the reading by %+.0f %%. Check the value you typed (e.g. 16.4, not 1.64).",
+                        ((pendingCal?.ratio ?? 1) - 1) * 100))
+        }
     }
 
-    private func calibrateVolts() {
-        guard let mult = params.params["BATT_VOLT_MULT"]?.value, vehicle.batteryVoltage > 0 else { return }
-        let new = Double(mult) * measuredVolts / vehicle.batteryVoltage
-        params.set("BATT_VOLT_MULT", Float(new))
-        note = String(format: "BATT_VOLT_MULT %.4f → %.4f", mult, new)
+    // BUG-018: a decimal-point typo (1.64 for 16.4) used to rescale the battery reading 10x without a word, which can
+    // trigger (or hide) the battery failsafe in flight. Refuse while armed; ask before changes outside ±20 %.
+    private func calibrate(_ name: String, measured: Double, reading: Double) {
+        guard let old = params.params[name]?.value, reading > 0, measured.isFinite, measured > 0 else { return }
+        if vehicle.armed { note = "Disarm before calibrating the battery monitor."; return }
+        let ratio = measured / reading
+        let new = Double(old) * ratio
+        if ratio < 0.8 || ratio > 1.25 { pendingCal = (name, old, new, ratio); return }
+        apply(name, old: old, new: new)
     }
 
-    private func calibrateAmps() {
-        guard let per = params.params["BATT_AMP_PERVLT"]?.value, vehicle.batteryCurrent > 0 else { return }
-        let new = Double(per) * measuredAmps / vehicle.batteryCurrent
-        params.set("BATT_AMP_PERVLT", Float(new))
-        note = String(format: "BATT_AMP_PERVLT %.3f → %.3f", per, new)
+    private func apply(_ name: String, old: Float, new: Double) {
+        params.set(name, Float(new))
+        note = String(format: "%@ %.4f → %.4f", name, old, new)
     }
+
+    private func calibrateVolts() { calibrate("BATT_VOLT_MULT", measured: measuredVolts, reading: vehicle.batteryVoltage) }
+
+    private func calibrateAmps() { calibrate("BATT_AMP_PERVLT", measured: measuredAmps, reading: vehicle.batteryCurrent) }
 }
 
 // MARK: - DataFlash logs

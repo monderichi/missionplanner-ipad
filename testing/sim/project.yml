@@ -1,0 +1,42 @@
+# Test-only XcodeGen spec: the unmodified app sources + a break-test XCUITest target.
+# Generated into testing/.build/sim by `testing/sim/sim.sh uitest`; the app's own project.yml is untouched.
+name: MissionPlannerPadBreakTest
+options:
+  bundleIdPrefix: io.github.missionplannerpad
+  deploymentTarget:
+    iOS: "16.0"
+packages:
+  MAVLinkKit:
+    path: ../../Packages/MAVLinkKit
+targets:
+  MissionPlannerPad:
+    type: application
+    platform: iOS
+    sources: [{path: ../../App}]
+    dependencies: [{package: MAVLinkKit}]
+    settings:
+      base:
+        PRODUCT_NAME: MissionPlannerPad
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.missionplannerpad.app
+        INFOPLIST_FILE: $(SRCROOT)/../../../Config/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "2"
+        SWIFT_VERSION: "5.0"
+        MARKETING_VERSION: "0.4.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGNING_ALLOWED: NO
+  BreakTestUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [{path: UITests}]
+    dependencies: [{target: MissionPlannerPad}]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "2"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGNING_ALLOWED: NO
+schemes:
+  BreakTest:
+    build: {targets: {MissionPlannerPad: all, BreakTestUITests: [test]}}
+    test: {targets: [BreakTestUITests]}

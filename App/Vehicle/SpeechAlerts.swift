@@ -15,6 +15,12 @@ final class SpeechAlerts: ObservableObject {
     }
 
     private let synth = AVSpeechSynthesizer()
+    /// BUG-025: true while a .tlog is replayed (nothing is announced).
+    var muted = false
+    private var linkAlertsSuppressedUntil = Date.distantPast
+
+    /// BUG-025: a deliberate Disconnect flips heartbeatAlive too; don't announce it as "Telemetry lost".
+    func suppressLinkAlerts(for seconds: TimeInterval) { linkAlertsSuppressedUntil = Date().addingTimeInterval(seconds) }
     private var bag = Set<AnyCancellable>()
     private var lastSpoken: [String: Date] = [:]
     private var lastBattery = Date.distantPast
@@ -28,10 +34,17 @@ final class SpeechAlerts: ObservableObject {
             }
             .store(in: &bag)
         v.$armed.removeDuplicates().dropFirst()
-            .sink { [weak self] armed in self?.say(armed ? "Armed" : "Disarmed") }
+            // review 1: reset() on Disconnect/Replay clears `armed`; only announce changes the live vehicle reports.
+            .sink { [weak self, weak v] armed in
+                guard let v, v.heartbeatAlive else { return }
+                self?.say(armed ? "Armed" : "Disarmed")
+            }
             .store(in: &bag)
         v.$heartbeatAlive.removeDuplicates().dropFirst()
-            .sink { [weak self] alive in self?.say(alive ? "Link restored" : "Telemetry lost") }
+            .sink { [weak self] alive in
+                guard let self, Date() >= self.linkAlertsSuppressedUntil else { return }
+                self.say(alive ? "Link restored" : "Telemetry lost")
+            }
             .store(in: &bag)
         v.$messages.compactMap { $0.first }
             .removeDuplicates { $0.id == $1.id }
@@ -55,7 +68,7 @@ final class SpeechAlerts: ObservableObject {
     }
 
     func say(_ text: String, minInterval: TimeInterval = 2) {
-        guard enabled else { return }
+        guard enabled, !muted else { return }
         let now = Date()
         if let last = lastSpoken[text], now.timeIntervalSince(last) < minInterval { return }
         lastSpoken[text] = now

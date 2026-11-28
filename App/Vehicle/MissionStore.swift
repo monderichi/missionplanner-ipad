@@ -100,6 +100,7 @@ final class MissionStore: ObservableObject {
 
     func read(_ type: MissionType) {
         guard let session, !session.isBusy else { return }
+        guidedSent = nil // review 1: this transfer's MISSION_ACK must not be read as the fly-here answer
         session.startDownload(type, now: now).forEach { send?($0) }
         busy = type
         progress = nil
@@ -108,6 +109,7 @@ final class MissionStore: ObservableObject {
 
     func write(_ type: MissionType) {
         guard let session, !session.isBusy else { return }
+        guidedSent = nil // review 1
         var items: [MissionItem]
         switch type {
         case .mission:
@@ -132,7 +134,9 @@ final class MissionStore: ObservableObject {
                              latitude: p.latitude, longitude: p.longitude, altitude: altitude)
         it.current = 2
         send?(it.message(targetSystem: session.targetSystem, targetComponent: session.targetComponent))
-        banner = String(format: "Flying to %.6f, %.6f at %.0f m", p.latitude, p.longitude, altitude)
+        // BUG-011: the vehicle answers a guided target with MISSION_ACK; report what it said (handle()).
+        guidedSent = (Date(), String(format: "%.6f, %.6f at %.0f m", p.latitude, p.longitude, altitude))
+        banner = "Fly here: sent \(guidedSent!.1)…"
     }
 
     func setCurrent(_ seq: Int) {
@@ -140,8 +144,17 @@ final class MissionStore: ObservableObject {
         banner = "Jumping to waypoint \(seq)"
     }
 
+    /// BUG-011: last guided ("fly here") target sent, awaiting the vehicle's MISSION_ACK.
+    private var guidedSent: (Date, String)?
+
     func handle(_ packet: MAVLinkPacket) {
         guard let session else { return }
+        if !session.isBusy, let g = guidedSent, Date().timeIntervalSince(g.0) < 5,
+           let a = packet.decode(MAV.MissionAck.self), a.missionType == 0 {
+            guidedSent = nil
+            banner = a.type == 0 ? "Flying to \(g.1)" : "Fly here rejected: \(MAVMissionResult.text(a.type)) (is the vehicle in Guided?)"
+            return
+        }
         let r = session.handle(packet, now: now)
         r.messages.forEach { send?($0) }
         r.events.forEach(apply)
@@ -149,6 +162,11 @@ final class MissionStore: ObservableObject {
 
     func tick() {
         guard let session else { return }
+        // BUG-011 (review 1): no MISSION_ACK within 5 s: say so instead of "sent…" forever.
+        if let g = guidedSent, Date().timeIntervalSince(g.0) > 5 {
+            guidedSent = nil
+            banner = "Fly here: no answer from the vehicle (target \(g.1))"
+        }
         let r = session.tick(now: now)
         r.messages.forEach { send?($0) }
         r.events.forEach(apply)
@@ -191,9 +209,14 @@ final class MissionStore: ObservableObject {
     }
 
     func setItems(_ type: MissionType, _ items: [MissionItem]) {
+        // BUG-010: more than WaypointFile.maxItems can't be uploaded (UInt16 seq; boards hold far fewer): refuse.
+        guard items.count <= WaypointFile.maxItems else {
+            banner = "Too many items (\(items.count)); the limit is \(WaypointFile.maxItems)."
+            return
+        }
         let numbered = items.enumerated().map { i, it -> MissionItem in
             var m = it
-            m.seq = UInt16(i)
+            m.seq = UInt16(clamping: i) // BUG-010 (lists are capped below)
             m.missionType = type.rawValue
             return m
         }
@@ -225,7 +248,7 @@ final class MissionStore: ObservableObject {
             ensureHome(fallback: p)
             var it = MissionItem(frame: defaultFrame, command: MissionCmd.waypoint, latitude: p.latitude,
                                  longitude: p.longitude, altitude: defaultAltitude)
-            it.seq = UInt16(mission.count)
+            it.seq = UInt16(clamping: mission.count) // BUG-010
             mission.append(it)
         case .fence:
             setItems(.fence, fence + [MissionItem(frame: MAVFrame.global, command: MissionCmd.fencePolygonInclusion,
@@ -288,6 +311,11 @@ final class MissionStore: ObservableObject {
     func addSurvey(options: SurveyGrid.Options, cameraTriggerDistance: Float) -> Int {
         let points = SurveyGrid.generate(polygon: surveyPolygon, options: options)
         guard !points.isEmpty else { return 0 }
+        // BUG-010: a huge area with tight spacing made > 65 535 points and trapped; refuse with a message.
+        guard mission.count + points.count + 2 <= WaypointFile.maxItems else {
+            banner = "Survey too large (\(points.count) points): increase the line spacing or shrink the area."
+            return 0
+        }
         ensureHome(fallback: points.first)
         var list = mission
         if cameraTriggerDistance > 0 {

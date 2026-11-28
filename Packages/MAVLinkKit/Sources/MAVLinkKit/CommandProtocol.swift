@@ -34,8 +34,19 @@ public final class CommandSession {
         var message: MAV.CommandLong
         var attempts: Int
         var lastSent: TimeInterval
+        /// BUG-002: ACKs before this time may belong to the command this one superseded (COMMAND_ACK has no request id):
+        /// they don't resolve it. It is confirmed by a later ACK, or by vehicle state (`confirmByState`). Set only when an
+        /// arm/disarm or mode command supersedes the in-flight one.
+        var ambiguousUntil: TimeInterval = -.infinity
     }
     private var pending: [UInt16: Pending] = [:]
+    /// BUG-002 (review 1): commands whose param1 selects *what* is addressed (servo channel, relay, motor, message id)
+    /// wait in order behind an in-flight command with the same id; every one of them is sent.
+    private var queued: [UInt16: [MAV.CommandLong]] = [:]
+
+    /// BUG-002: for these, the newest request replaces the in-flight one at once (the pilot changed their mind):
+    /// arm/disarm and flight mode. The old one is never resent again.
+    public static let supersedable: Set<UInt16> = [MAVCmd.componentArmDisarm, MAVCmd.doSetMode]
 
     public init(targetSystem: UInt8, targetComponent: UInt8 = 1, config: Config = Config()) {
         self.targetSystem = targetSystem
@@ -43,15 +54,55 @@ public final class CommandSession {
         self.config = config
     }
 
-    public var pendingCommands: [UInt16] { pending.keys.sorted() }
+    public var pendingCommands: [UInt16] { Set(pending.keys).union(queued.filter { !$0.value.isEmpty }.keys).sorted() }
+
+    /// The in-flight message for a command id (to know what an event refers to).
+    public func inFlight(_ command: UInt16) -> MAV.CommandLong? { pending[command]?.message }
+
+    /// Seconds until ACKs / vehicle state may confirm the in-flight command with this id (0 = now).
+    public func ambiguityRemaining(_ command: UInt16, now: TimeInterval) -> TimeInterval {
+        max(0, (pending[command]?.ambiguousUntil ?? -.infinity) - now)
+    }
+
+    /// Number of commands with this id waiting behind the in-flight one.
+    public func queuedCount(_ command: UInt16) -> Int { queued[command]?.count ?? 0 }
 
     public func send(_ command: UInt16, params p: [Float] = [], now: TimeInterval) -> [MAVLinkMessage] {
         let v = p + [Float](repeating: 0, count: max(0, 7 - p.count))
         let msg = MAV.CommandLong(param1: v[0], param2: v[1], param3: v[2], param4: v[3],
                                   param5: v[4], param6: v[5], param7: v[6], command: command,
                                   targetSystem: targetSystem, targetComponent: targetComponent, confirmation: 0)
+        if pending[command] != nil {
+            if Self.supersedable.contains(command) {
+                // BUG-002 (review 1): send the newer arm/disarm or mode change immediately and stop retrying the
+                // superseded one (a late ARM retry could re-arm after DISARM). ACKs within one timeout are ambiguous.
+                pending[command] = Pending(message: msg, attempts: 1, lastSent: now, ambiguousUntil: now + config.timeout)
+                return [msg]
+            }
+            queued[command, default: []].append(msg) // FIFO: each servo/relay/motor/message request goes out
+            return []
+        }
         pending[command] = Pending(message: msg, attempts: 1, lastSent: now)
         return [msg]
+    }
+
+    /// BUG-002: the vehicle's own state (HEARTBEAT armed flag / custom mode) shows the in-flight command took effect.
+    public func confirmByState(_ command: UInt16, now: TimeInterval) -> [Event] {
+        // review 2: not inside the ambiguity window either: a heartbeat from before the superseded command took effect
+        // could otherwise "confirm" a lost DISARM.
+        guard let p = pending[command], p.attempts > 0, now >= p.ambiguousUntil else { return [] }
+        pending[command] = nil
+        releaseQueued(command)
+        return [.accepted(command: command)]
+    }
+
+    /// The earlier command with this id is resolved: the next queued one goes out on the next tick
+    /// (attempts 0, lastSent far in the past) and is then retried on its own.
+    private func releaseQueued(_ command: UInt16) {
+        guard var q = queued[command], !q.isEmpty else { return }
+        let next = q.removeFirst()
+        queued[command] = q.isEmpty ? nil : q
+        pending[command] = Pending(message: next, attempts: 0, lastSent: -.infinity)
     }
 
     // Convenience builders for the commands the app uses.
@@ -71,16 +122,22 @@ public final class CommandSession {
     }
 
     public func handle(_ ack: MAV.CommandAck, now: TimeInterval) -> [Event] {
-        guard pending[ack.command] != nil else { return [] }
+        guard let p = pending[ack.command] else { return [] }
+        // review 4: released from the queue but not sent yet: this ACK can only be a duplicate for the previous one.
+        if p.attempts == 0 { return [] }
+        // BUG-002: may be the superseded command's ACK. Ignore; a later ACK (after our resend) or the vehicle state decides.
+        if now < p.ambiguousUntil { return [] }
         switch ack.result {
         case MAVResult.accepted.rawValue:
             pending[ack.command] = nil
+            releaseQueued(ack.command)
             return [.accepted(command: ack.command)]
         case MAVResult.inProgress.rawValue:
             pending[ack.command]?.lastSent = now // keep waiting, don't resend
             return [.inProgress(command: ack.command, progress: ack.progress)]
         default:
             pending[ack.command] = nil
+            releaseQueued(ack.command)
             return [.rejected(command: ack.command, result: ack.result)]
         }
     }
@@ -93,10 +150,15 @@ public final class CommandSession {
             if p.attempts >= config.attempts {
                 pending[cmd] = nil
                 events.append(.timedOut(command: cmd))
+                releaseQueued(cmd)
             } else {
+                // review 3/5: no ambiguity window for a released queued command: ignoring its own fast ACK made it be sent
+                // twice, and (review 5) a window after a resend cascaded down the whole queue (every later motor test /
+                // photo twice). Only the unsent case is guarded (`handle`, attempts == 0). Limit: COMMAND_ACK has no
+                // request id, so a duplicate ACK of the previous command arriving after this one went out still resolves it.
                 p.attempts += 1
                 p.lastSent = now
-                p.message.confirmation = UInt8(min(255, p.attempts - 1)) // MAVLink: increment on resend
+                p.message.confirmation = UInt8(min(255, max(0, p.attempts - 1))) // MAVLink: increment on resend
                 pending[cmd] = p
                 out.append(p.message)
             }

@@ -187,6 +187,8 @@ struct PlanView: View {
                     } label: { Label("Save .waypoints", systemImage: "square.and.arrow.down") }
                         .disabled(mission.mission.count < 2)
                 } label: { Label("File", systemImage: "doc") }
+                .accessibilityLabel("File") // BUG-035
+                .accessibilityIdentifier("plan.file") // TEST-031
             }
             Button(role: .destructive) { confirmClear = true } label: { Label("Clear", systemImage: "trash") }
         }
@@ -338,6 +340,7 @@ struct MissionItemEditor: View {
     let type: MissionType
     let index: Int
     @State private var item = MissionItem()
+    @State private var invalidPosition = false // BUG-007
     @State private var loaded = false
 
     private var commands: [MissionCommandInfo] { MissionCommandCatalog.commands(vehicleType: vehicle.vehicleType) }
@@ -408,8 +411,19 @@ struct MissionItemEditor: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
+                        // BUG-007: typed latitude ≥ 214.75 trapped; 90…214 was silently stored and uploaded.
+                        if MissionCmd.hasLocation(item.command),
+                           !MissionItem.isValidCoordinate(latitude: item.latitude, longitude: item.longitude) {
+                            invalidPosition = true
+                            return
+                        }
                         mission.update(type, index: index, item)
                         dismiss()
+                    }
+                    .alert("Invalid position", isPresented: $invalidPosition) {
+                        Button("OK", role: .cancel) {}
+                    } message: {
+                        Text("Latitude must be between -90 and 90, longitude between -180 and 180.")
                     }
                 }
             }

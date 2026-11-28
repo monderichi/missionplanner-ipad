@@ -76,7 +76,7 @@ and graphs, and firmware flashing (that needs USB).
 1. Connect (for example *ExpressLRS WiFi*), wait for the heartbeat, then open **Parameters** in the top bar.
 2. Wait for the download to finish (progress shown top right; about 1 minute over ELRS).
 3. **Save** first, so you have a backup in *Files*.
-4. Search for the parameter (for example `SR6_` or "battery"), tap it, pick or type the new value, and tap **Write to vehicle**.
+4. Search for the parameter (for example `MAV6_` on ArduPilot 4.7+, `SR6_` on older firmware, or "battery"), tap it, pick or type the new value, and tap **Write to vehicle**.
    The banner confirms what the flight controller stored.
 5. If the banner says a reboot is needed, disarm and tap **Reboot now**.
 

@@ -68,13 +68,15 @@ final class ParameterStore: ObservableObject {
 
     func set(_ name: String, _ value: Float) {
         guard let session else { return }
+        // BUG-020: ArduPilot ignores non-finite PARAM_SETs, so they only time out after retries: refuse here.
+        guard value.isFinite else { banner = "\(name): not a valid number, not written"; return }
         session.set(name, value: value, now: now).forEach { send?($0) }
         pendingNames = Set(session.pendingSetNames)
     }
 
     /// Queue many writes; they're sent a few at a time from tick().
     func setMany(_ values: [String: Float]) {
-        writeQueue += values.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
+        writeQueue += values.filter { $0.value.isFinite }.sorted { $0.key < $1.key }.map { ($0.key, $0.value) } // BUG-020
         queuedWrites = writeQueue.count
         failures = []
         pump()
@@ -185,6 +187,7 @@ final class ParameterStore: ObservableObject {
         var unknown: [String] = []
         for (name, value) in file {
             guard let cur = params[name] else { unknown.append(name); continue }
+            if cur.value.isNaN && value.isNaN { continue } // BUG-020: NaN == NaN for the compare view
             if !ParameterSession.same(cur.value, value, isInteger: cur.isInteger) {
                 changes.append(Difference(name: name, current: cur.value, file: value))
             }

@@ -17,13 +17,29 @@ final class CommandCenter: ObservableObject {
 
     var isAttached: Bool { session != nil }
 
+    /// BUG-017: set by LinkManager; used to check the vehicle's real state when an ACK never arrives.
+    weak var vehicle: VehicleModel?
+    private var requestedMode: UInt32?
+    private var requestedArm: Bool?
+
+    /// BUG-027: a session replaced/removed while commands were in flight: say so instead of "Arming…" forever.
+    private func abandonPending() {
+        defer { labelQueue = [:]; sentAt = [:] }
+        if let s = session, !s.pendingCommands.isEmpty {
+            lastResult = "\(name(s.pendingCommands[0])): link changed, not confirmed"
+            lastResultOK = false
+        }
+    }
+
     func attach(systemID: UInt8, componentID: UInt8, narrowLink: Bool) {
+        abandonPending()
         session = CommandSession(targetSystem: systemID, targetComponent: componentID,
                                  config: narrowLink ? .narrowLink : CommandSession.Config())
         pending = []
     }
 
     func detach() {
+        abandonPending()
         session = nil
         pending = []
     }
@@ -31,6 +47,8 @@ final class CommandCenter: ObservableObject {
     func arm(_ arm: Bool, force: Bool = false) {
         guard let session else { return }
         session.arm(arm, force: force, now: now).forEach { send?($0) }
+        markSent(MAVCmd.componentArmDisarm)
+        requestedArm = arm
         lastResult = arm ? "Arming…" : (force ? "Force disarming…" : "Disarming…")
         refreshPending()
     }
@@ -38,6 +56,8 @@ final class CommandCenter: ObservableObject {
     func setMode(_ mode: UInt32, name: String) {
         guard let session else { return }
         session.setMode(mode, now: now).forEach { send?($0) }
+        markSent(MAVCmd.doSetMode)
+        requestedMode = mode
         lastResult = "Changing mode to \(name)…"
         refreshPending()
     }
@@ -52,10 +72,44 @@ final class CommandCenter: ObservableObject {
     /// Generic tracked command (retried until COMMAND_ACK).
     func command(_ command: UInt16, params: [Float], label: String) {
         guard let session else { return }
-        session.send(command, params: params, now: now).forEach { send?($0) }
-        names[command] = label
-        lastResult = "\(label)…"
+        let out = session.send(command, params: params, now: now)
+        out.forEach { send?($0) }
+        if out.isEmpty {
+            // BUG-002 (review 1): queued behind an in-flight command with the same id; keep its label in order so the
+            // results name the right servo/relay/motor.
+            labelQueue[command, default: []].append(label)
+            lastResult = "\(label)… (queued)"
+        } else {
+            names[command] = label
+            lastResult = "\(label)…"
+        }
+        markSent(command)
         refreshPending()
+    }
+
+    /// Earliest heartbeat time that may confirm the in-flight command: 0.3 s after sending, or the end of its
+    /// ambiguity window (review 2) when it superseded another command.
+    private func markSent(_ cmd: UInt16) {
+        guard let session else { return }
+        sentAt[cmd] = Date().addingTimeInterval(max(0.3, session.ambiguityRemaining(cmd, now: now)))
+    }
+
+    /// Labels of commands queued behind an in-flight one with the same id (FIFO, mirrors CommandSession's queue).
+    private var labelQueue: [UInt16: [String]] = [:]
+    /// Per command id: only a HEARTBEAT received at/after this time may confirm the in-flight command (see markSent).
+    private var sentAt: [UInt16: Date] = [:]
+
+    /// BUG-002: confirm arm/disarm and mode changes from the vehicle's HEARTBEAT (COMMAND_ACKs are ambiguous after a
+    /// superseded command and may be lost on ELRS). Only a heartbeat received ≥ 0.3 s after the send counts.
+    private func confirmFromVehicleState() {
+        guard let session, let v = vehicle, v.heartbeatAlive, let hb = v.lastHeartbeat else { return }
+        for cmd in [MAVCmd.componentArmDisarm, MAVCmd.doSetMode] {
+            // review 2: the heartbeat must postdate the send by the ambiguity window (≥ 0.3 s), so it reflects what the
+            // vehicle did after *this* command, not the state before a superseded one took effect.
+            guard let m = session.inFlight(cmd), let after = sentAt[cmd], hb >= after else { continue }
+            let reached = cmd == MAVCmd.componentArmDisarm ? v.armed == (m.param1 == 1) : v.customMode == UInt32(exactly: m.param2)
+            if reached { session.confirmByState(cmd, now: now).forEach { apply($0) } }
+        }
     }
 
     /// Sent exactly once, never retried: for commands where a repeat would restart something
@@ -123,6 +177,7 @@ final class CommandCenter: ObservableObject {
         let r = session.tick(now: now)
         r.messages.forEach { send?($0) }
         r.events.forEach { apply($0) }
+        confirmFromVehicleState()
         if !r.events.isEmpty || !r.messages.isEmpty { refreshPending() }
     }
 
@@ -141,6 +196,23 @@ final class CommandCenter: ObservableObject {
     }
 
     private func apply(_ e: CommandSession.Event) {
+        applyResult(e)
+        // BUG-002 (review 1): the next queued command with this id goes out now: show it as sending, with its own label.
+        switch e {
+        case .accepted(let cmd), .rejected(let cmd, _), .timedOut(let cmd):
+            if var q = labelQueue[cmd], !q.isEmpty {
+                let next = q.removeFirst()
+                labelQueue[cmd] = q.isEmpty ? nil : q
+                names[cmd] = next
+                lastResult = "\(next)…"
+                lastResultOK = true
+            }
+        case .inProgress: break
+        }
+        refreshPending()
+    }
+
+    private func applyResult(_ e: CommandSession.Event) {
         switch e {
         case .accepted(let cmd) where quiet.contains(cmd),
              .rejected(let cmd, _) where quiet.contains(cmd),
@@ -159,8 +231,17 @@ final class CommandCenter: ObservableObject {
             lastResult = "\(name(cmd)): \(CommandSession.resultText(result)). Check Messages for the reason."
             lastResultOK = false
         case .timedOut(let cmd):
-            lastResult = "\(name(cmd)): no answer from vehicle"
-            lastResultOK = false
+            // BUG-017: the ACKs may be lost while the command worked: check the heartbeat state before failing.
+            if cmd == MAVCmd.doSetMode, let m = requestedMode, let v = vehicle, v.heartbeatAlive, v.customMode == m {
+                lastResult = "\(name(cmd)): no ACK, but the vehicle is now in \(v.modeName)"
+                lastResultOK = true
+            } else if cmd == MAVCmd.componentArmDisarm, let a = requestedArm, let v = vehicle, v.heartbeatAlive, v.armed == a {
+                lastResult = "\(name(cmd)): no ACK, but the vehicle is now \(a ? "armed" : "disarmed")"
+                lastResultOK = true
+            } else {
+                lastResult = "\(name(cmd)): no answer from vehicle"
+                lastResultOK = false
+            }
         }
     }
 }

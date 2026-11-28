@@ -182,6 +182,8 @@ public final class MAVLinkParser {
     private var buffer: [UInt8] = []
     private var start = 0
     private var lastSequence: [UInt16: UInt8] = [:]
+    /// BUG-016: per source, sequence numbers recently counted as lost (so a late arrival can be un-counted).
+    private var missing: [UInt16: Set<UInt8>] = [:]
 
     public init() {}
 
@@ -189,6 +191,7 @@ public final class MAVLinkParser {
         buffer.removeAll()
         start = 0
         lastSequence.removeAll()
+        missing.removeAll()
         stats = Stats()
     }
 
@@ -230,8 +233,20 @@ public final class MAVLinkParser {
         let key = (UInt16(p.systemID) << 8) | UInt16(p.componentID)
         if let last = lastSequence[key] {
             let gap = Int(p.sequence &- (last &+ 1))
-            // A huge "gap" is almost always a vehicle reboot / second link; don't count it.
-            if gap > 0 && gap < 128 { stats.packetsLost += gap }
+            // BUG-016: a "gap" of 128+ is a late (reordered) or duplicate packet. Keep `last`, and if this sequence
+            // was counted as missing earlier, it wasn't lost after all: un-count it. Duplicates are simply ignored.
+            // (Before, late packets moved `last` backwards and the next packet counted the same gap again:
+            // 30 % loss + jitter showed as ~93 % loss, pure reordering as 45 %.)
+            if gap >= 128 {
+                if missing[key]?.remove(p.sequence) != nil, stats.packetsLost > 0 { stats.packetsLost -= 1 }
+                return
+            }
+            if gap > 0 {
+                stats.packetsLost += gap
+                var m = missing[key] ?? []
+                for k in 1...gap { m.insert(last &+ UInt8(k)) }
+                missing[key] = m.count > 128 ? [] : m // a long outage: forget, the window is only for reordering
+            }
         }
         lastSequence[key] = p.sequence
     }

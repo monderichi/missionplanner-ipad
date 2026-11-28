@@ -12,6 +12,7 @@ final class LogStore: ObservableObject {
     @Published private(set) var received = 0
     @Published private(set) var rate: Double = 0   // bytes/s
     @Published var message: String?
+    static let maxDownloadBytes: UInt32 = 256 * 1_048_576 // BUG-019
 
     var send: ((MAVLinkMessage) -> Void)?
 
@@ -55,6 +56,11 @@ final class LogStore: ObservableObject {
 
     func start(_ entry: LogEntryInfo) {
         guard let system, download?.active != true else { return }
+        // BUG-019: the session keeps the whole log in RAM (plus a copy when saving); refuse sizes an iPad can't hold.
+        guard entry.size <= Self.maxDownloadBytes else {
+            message = "Log \(entry.id) is \(entry.size / 1_048_576) MB: too large to download over MAVLink here (limit \(Self.maxDownloadBytes / 1_048_576) MB). Copy it from the SD card instead."
+            return
+        }
         let s = LogDownloadSession(entry: entry, targetSystem: system, targetComponent: component)
         download = s
         downloading = entry

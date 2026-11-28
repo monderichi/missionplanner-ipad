@@ -184,7 +184,7 @@ struct ParametersView: View {
             HStack {
                 Text(title).fontWeight(group == g ? .bold : .regular)
                 Spacer()
-                Text("\(count)").font(.caption).foregroundColor(.secondary)
+                Text(verbatim: String(count)) /* BUG-036 */.font(.caption).foregroundColor(.secondary)
             }
         }
         .listRowBackground(group == g ? Color.accentColor.opacity(0.15) : Color.clear)

@@ -68,9 +68,12 @@ struct RootView: View {
                                 airspeed: vehicle.airspeed, groundspeed: vehicle.groundspeed,
                                 altitude: vehicle.relativeAltitude, climbRate: vehicle.climbRate,
                                 armed: vehicle.armed, mode: vehicle.modeName,
-                                linkAlive: vehicle.heartbeatAlive || !link.state.isActive,
+                                // BUG-001: once a vehicle was seen, a dead link shows NO HEARTBEAT whatever the transport
+                                // state (a failed TCP link used to count as "alive" because it was no longer active).
+                                linkAlive: vehicle.heartbeatAlive || vehicle.systemID == nil,
                                 attitudeStale: vehicle.attitudeStale,
-                                isSub: vehicle.isSub, depth: vehicle.depth, leakDetected: vehicle.leakDetected)
+                                isSub: vehicle.isSub, depth: vehicle.depth, leakDetected: vehicle.leakDetected,
+                                warning: vehicle.warning, warningCritical: vehicle.warningCritical)
                             .frame(height: min(geo.size.height * 0.48, 340))
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 6) {
@@ -127,9 +130,10 @@ struct StatusBar: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 Text(link.state.description).font(.caption).lineLimit(1)
+                    .accessibilityIdentifier("status.link") // TEST-031
                 Text(vehicle.heartbeatAlive ? "\(vehicle.vehicleTypeName) · sys \(vehicle.systemID.map { "\($0)" } ?? "?")"
                                             : (link.state.isActive ? "Waiting for heartbeat…" : " "))
-                    .font(.caption2).foregroundColor(.secondary)
+                    .font(.caption2).foregroundColor(.primary.opacity(0.85)) // BUG-035: contrast
             }
             .frame(width: 220, alignment: .leading)
 
@@ -142,13 +146,18 @@ struct StatusBar: View {
             Spacer()
 
             item("Mode", vehicle.modeName)
-            item("State", vehicle.armed ? "ARMED" : "Disarmed", color: vehicle.armed ? .red : .green)
-            item("GPS", "\(vehicle.gpsFixName) · \(vehicle.satellites)",
-                 color: vehicle.gpsFixType >= 3 ? .primary : .orange)
-            item("Battery", vehicle.batteryRemaining >= 0
+            // BUG-001/-012: with no live vehicle the values are shown as "—", never as live data.
+            let live = vehicle.systemID != nil && vehicle.heartbeatAlive
+            item("State", !live ? "—" : (vehicle.armed ? "ARMED" : "Disarmed"), color: !live ? .secondary : (vehicle.armed ? .red : .green))
+            item("GPS", !live ? "—" : "\(vehicle.gpsFixName) · \(vehicle.satellites)",
+                 color: !live ? .secondary : (vehicle.gpsFixType >= 3 ? .primary : .orange))
+            item("Battery", !live ? "—" : (vehicle.batteryRemaining >= 0
                     ? String(format: "%.1fV %ld%%", vehicle.batteryVoltage, vehicle.batteryRemaining)
-                    : String(format: "%.1fV", vehicle.batteryVoltage))
-            item("Link", linkQuality)
+                    : String(format: "%.1fV", vehicle.batteryVoltage)),
+                 // BUG-008: battery item coloured at the warning thresholds
+                 color: !live || vehicle.batteryRemaining < 0 ? .primary
+                    : (vehicle.batteryRemaining <= 10 ? .red : (vehicle.batteryRemaining <= 20 ? .orange : .primary)))
+            item("Link", live ? linkQuality : "—")
             Button { showDiagnostics = true } label: { Image(systemName: "info.circle") }
                 .accessibilityLabel("Diagnostics and feedback")
             Button { speech.enabled.toggle() } label: {
@@ -173,16 +182,14 @@ struct StatusBar: View {
         return vehicle.heartbeatAlive ? .green : .orange
     }
 
+    /// BUG-016: over the last 5 s (LinkManager.linkQualityPct), so a dead link shows 0 % instead of a stale 100 %.
     private var linkQuality: String {
-        let s = link.stats
-        let total = s.packetsReceived + s.packetsLost
-        guard total > 0 else { return "—" }
-        return String(format: "%.0f%%", 100 * Double(s.packetsReceived) / Double(total))
+        link.linkQualityPct.map { String(format: "%.0f%%", $0) } ?? "—"
     }
 
     private func item(_ title: String, _ value: String, color: Color = .primary) -> some View {
         VStack(spacing: 0) {
-            Text(title).font(.caption2).foregroundColor(.secondary)
+            Text(title).font(.caption2).foregroundColor(.primary.opacity(0.85)) // BUG-035: contrast
             Text(value).font(.subheadline.weight(.semibold)).foregroundColor(color).lineLimit(1)
         }
     }
