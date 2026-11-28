@@ -8,7 +8,7 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject var link: LinkManager
-    @EnvironmentObject var vehicle: VehicleModel
+    // BUG-037 (round 3): RootView no longer observes the vehicle (HUDContainer does), so it doesn't redraw at 10 Hz.
     @State private var showConnect = false
     @State private var tab = Tab.quick
     @State private var screen = Screen.data
@@ -64,16 +64,7 @@ struct RootView: View {
             GeometryReader { geo in
                 HStack(spacing: 0) {
                     VStack(spacing: 8) {
-                        HUDView(roll: vehicle.roll, pitch: vehicle.pitch, heading: vehicle.heading,
-                                airspeed: vehicle.airspeed, groundspeed: vehicle.groundspeed,
-                                altitude: vehicle.relativeAltitude, climbRate: vehicle.climbRate,
-                                armed: vehicle.armed, mode: vehicle.modeName,
-                                // BUG-001: once a vehicle was seen, a dead link shows NO HEARTBEAT whatever the transport
-                                // state (a failed TCP link used to count as "alive" because it was no longer active).
-                                linkAlive: vehicle.heartbeatAlive || vehicle.systemID == nil,
-                                attitudeStale: vehicle.attitudeStale,
-                                isSub: vehicle.isSub, depth: vehicle.depth, leakDetected: vehicle.leakDetected,
-                                warning: vehicle.warning, warningCritical: vehicle.warningCritical)
+                        HUDContainer() // BUG-037 (round 3): the 10 Hz HUD redraw lives in its own view
                             .frame(height: min(geo.size.height * 0.48, 340))
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 6) {
@@ -105,6 +96,26 @@ struct RootView: View {
                     FlightMapView()
                 }
             }
+    }
+}
+
+/// BUG-037 (round 3): the HUD, extracted from RootView. Observes FastTelemetry (attitude, speeds, altitude)
+/// and the vehicle (mode, armed, link, warnings), so only this view redraws at 10 Hz.
+struct HUDContainer: View {
+    @EnvironmentObject var vehicle: VehicleModel
+    @EnvironmentObject var fast: FastTelemetry
+
+    var body: some View {
+        HUDView(roll: fast.roll, pitch: fast.pitch, heading: fast.heading,
+                airspeed: fast.airspeed, groundspeed: fast.groundspeed,
+                altitude: fast.relativeAltitude, climbRate: fast.climbRate,
+                armed: vehicle.armed, mode: vehicle.modeName,
+                // BUG-001: once a vehicle was seen, a dead link shows NO HEARTBEAT whatever the transport
+                // state (a failed TCP link used to count as "alive" because it was no longer active).
+                linkAlive: vehicle.heartbeatAlive || vehicle.systemID == nil,
+                attitudeStale: vehicle.attitudeStale,
+                isSub: vehicle.isSub, depth: vehicle.depth, leakDetected: vehicle.leakDetected,
+                warning: vehicle.warning, warningCritical: vehicle.warningCritical)
     }
 }
 

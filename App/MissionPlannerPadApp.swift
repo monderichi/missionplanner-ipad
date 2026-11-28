@@ -13,6 +13,7 @@ struct MissionPlannerPadApp: App {
             RootView()
                 .environmentObject(link)
                 .environmentObject(link.vehicle)
+                .environmentObject(link.vehicle.fast) // BUG-037 (round 3): high-rate telemetry
                 .environmentObject(link.params)
                 .environmentObject(link.commands)
                 .environmentObject(link.mission)

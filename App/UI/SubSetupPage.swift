@@ -5,6 +5,7 @@ import SwiftUI
 
 struct SubSetupPage: View {
     @EnvironmentObject var vehicle: VehicleModel
+    @EnvironmentObject var fast: FastTelemetry // BUG-037 (round 3): depth comes from the fast model
     @EnvironmentObject var params: ParameterStore
 
     var body: some View {

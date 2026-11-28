@@ -35,12 +35,12 @@ struct ServoPage: View {
 
 struct ServoRow: View {
     @EnvironmentObject var params: ParameterStore
-    @EnvironmentObject var vehicle: VehicleModel
+    @EnvironmentObject var fast: FastTelemetry // BUG-037 (round 3): only the live servo output is read
     let index: Int
 
     private var pwm: Int {
         let i = index - 1
-        return i >= 0 && i < vehicle.servoOutputs.count ? Int(vehicle.servoOutputs[i]) : 0
+        return i >= 0 && i < fast.servoOutputs.count ? Int(fast.servoOutputs[i]) : 0
     }
 
     var body: some View {

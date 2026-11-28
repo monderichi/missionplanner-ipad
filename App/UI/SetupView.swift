@@ -90,8 +90,9 @@ enum SetupPage: String, CaseIterable, Identifiable {
             return [
                 "ATC_STR_RAT_P", "ATC_STR_RAT_I", "ATC_STR_RAT_D", "ATC_STR_RAT_FF", "ATC_STR_RAT_MAX", "ATC_STR_ANG_P",
                 "ATC_SPEED_P", "ATC_SPEED_I", "ATC_SPEED_D", "ATC_ACCEL_MAX", "ATC_DECEL_MAX", "ATC_STR_ACC_MAX",
-                "ATC_TURN_MAX_G", "CRUISE_SPEED", "CRUISE_THROTTLE", "WP_SPEED", "WP_RADIUS", "WP_OVERSHOOT",
-                "TURN_RADIUS", "TURN_MAX_G", "NAVL1_PERIOD", "MOT_THR_MIN", "MOT_THR_MAX", "MOT_SLEWRATE",
+                "ATC_TURN_MAX_G", "CRUISE_SPEED", "CRUISE_THROTTLE", "WP_SPEED", "WP_RADIUS",
+                // WP_OVERSHOOT and TURN_MAX_G are not in Rover 4.7.3 (TURN_MAX_G became ATC_TURN_MAX_G above)
+                "TURN_RADIUS", "NAVL1_PERIOD", "MOT_THR_MIN", "MOT_THR_MAX", "MOT_SLEWRATE",
                 "PILOT_STEER_TYPE",
             ]
         default: // Copter. PSC_NE_* / PSC_D_* are the 4.7+ names of PSC_VELXY/POSXY/ACCZ.
@@ -240,6 +241,7 @@ struct SetupView: View {
 
 struct PrearmPage: View {
     @EnvironmentObject var vehicle: VehicleModel
+    @EnvironmentObject var fast: FastTelemetry // BUG-037 (round 3): live RC / vibration values come from the fast model
     @EnvironmentObject var calibration: CalibrationStore
 
     private var prearmMessages: [StatusMessage] {
@@ -282,8 +284,8 @@ struct PrearmPage: View {
             Section("EKF / vibration") {
                 LabeledContent("EKF variances (vel / posH / posV / compass / terrain)",
                                value: vehicle.ekfVariances.map { String(format: "%.2f", $0) }.joined(separator: " / "))
-                LabeledContent("Vibration X / Y / Z", value: vehicle.vibration.map { String(format: "%.1f", $0) }.joined(separator: " / "))
-                LabeledContent("Clipping", value: vehicle.clipping.map { "\($0)" }.joined(separator: " / "))
+                LabeledContent("Vibration X / Y / Z", value: fast.vibration.map { String(format: "%.1f", $0) }.joined(separator: " / "))
+                LabeledContent("Clipping", value: fast.clipping.map { "\($0)" }.joined(separator: " / "))
             }
         }
         .listStyle(.insetGrouped)
@@ -442,6 +444,7 @@ struct CompassPage: View {
 
 struct RadioPage: View {
     @EnvironmentObject var vehicle: VehicleModel
+    @EnvironmentObject var fast: FastTelemetry // BUG-037 (round 3): live RC / vibration values come from the fast model
     @EnvironmentObject var params: ParameterStore
     @EnvironmentObject var commands: CommandCenter // BUG-029
     @State private var capturing = false
@@ -449,7 +452,7 @@ struct RadioPage: View {
     @State private var maxs: [UInt16] = Array(repeating: 800, count: 18)
     @State private var message: String?
 
-    private var channels: Int { max(8, min(16, vehicle.rcChannelCount)) }
+    private var channels: Int { max(8, min(16, fast.rcChannelCount)) }
     private var centredThrottle: Bool {
         let fw = MAVType(rawValue: vehicle.vehicleType)?.firmware
         return fw == .rover || fw == .sub
@@ -459,7 +462,7 @@ struct RadioPage: View {
         Form {
             Section {
                 ForEach(0..<channels, id: \.self) { i in
-                    let v = vehicle.rcChannels[i]
+                    let v = fast.rcChannels[i]
                     HStack {
                         Text("CH\(i + 1)").frame(width: 46, alignment: .leading).monospacedDigit()
                         ProgressView(value: Double(min(max(Int(v), 800), 2200) - 800), total: 1400)
@@ -470,16 +473,16 @@ struct RadioPage: View {
                     }
                 }
             } header: {
-                Text("RC inputs (\(vehicle.rcChannelCount) channels)")
+                Text("RC inputs (\(fast.rcChannelCount) channels)")
             } footer: {
-                if vehicle.rcChannelCount == 0 {
+                if fast.rcChannelCount == 0 {
                     Text("No RC input. Is the receiver powered (battery in) and the transmitter on?")
                 }
             }
             Section {
                 if !capturing {
                     Button { start() } label: { Label("Calibrate radio", systemImage: "play.fill") }
-                        .disabled(vehicle.rcChannelCount == 0 || vehicle.armed)
+                        .disabled(fast.rcChannelCount == 0 || vehicle.armed)
                 } else {
                     Text("Move all sticks and switches to their full extents, then centre the sticks and put throttle down.")
                     Button { save() } label: { Label("Save calibration", systemImage: "checkmark.circle.fill") }
@@ -489,7 +492,7 @@ struct RadioPage: View {
                 if let m = message { Text(m).font(.caption) }
             }
         }
-        .onChange(of: vehicle.rcChannels) { values in
+        .onChange(of: fast.rcChannels) { values in
             guard capturing else { return }
             for i in 0..<min(values.count, 18) where values[i] > 800 && values[i] < 2200 {
                 mins[i] = min(mins[i], values[i])
@@ -518,7 +521,7 @@ struct RadioPage: View {
         var out: [String: Float] = [:]
         for i in 0..<channels where maxs[i] > mins[i] && maxs[i] - mins[i] > 300 {
             let ch = i + 1
-            let cur = vehicle.rcChannels[i]
+            let cur = fast.rcChannels[i]
             // Copter/plane throttle rests at its minimum; rover/sub throttle is centre-sprung like the other sticks.
             let trim = (ch == throttleCh && !centredThrottle) ? mins[i] : min(max(cur, mins[i]), maxs[i])
             out["RC\(ch)_MIN"] = Float(mins[i])
@@ -539,6 +542,7 @@ struct RadioPage: View {
 
 struct FlightModesPage: View {
     @EnvironmentObject var vehicle: VehicleModel
+    @EnvironmentObject var fast: FastTelemetry // BUG-037 (round 3): live RC / vibration values come from the fast model
     @EnvironmentObject var params: ParameterStore
 
     private var isRover: Bool { MAVType(rawValue: vehicle.vehicleType)?.firmware == .rover }
@@ -551,8 +555,8 @@ struct FlightModesPage: View {
     }
 
     private var activeSlot: Int? {
-        guard channel >= 1 && channel <= vehicle.rcChannels.count else { return nil }
-        let pwm = Int(vehicle.rcChannels[channel - 1])
+        guard channel >= 1 && channel <= fast.rcChannels.count else { return nil }
+        let pwm = Int(fast.rcChannels[channel - 1])
         guard pwm > 800 && pwm < 2200 else { return nil }
         switch pwm {
         case ..<1231: return 1
@@ -573,7 +577,7 @@ struct FlightModesPage: View {
             Section {
                 LabeledContent("Mode switch channel", value: "CH\(channel) (\(channelParam))")
                 LabeledContent("Current PWM", value: channel == 0 ? "Mode switch disabled"
-                    : (channel <= vehicle.rcChannels.count ? String(vehicle.rcChannels[channel - 1]) : "—")) // BUG-005, BUG-036
+                    : (channel <= fast.rcChannels.count ? String(fast.rcChannels[channel - 1]) : "—")) // BUG-005, BUG-036
                 LabeledContent("Current mode", value: vehicle.modeName)
             }
             Section("Switch positions") {

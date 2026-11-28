@@ -24,6 +24,7 @@ final class SpeechAlerts: ObservableObject {
     private var bag = Set<AnyCancellable>()
     private var lastSpoken: [String: Date] = [:]
     private var lastBattery = Date.distantPast
+    private var lastMessageID: UUID?
 
     func observe(_ v: VehicleModel) {
         bag.removeAll()
@@ -46,11 +47,22 @@ final class SpeechAlerts: ObservableObject {
                 self.say(alive ? "Link restored" : "Telemetry lost")
             }
             .store(in: &bag)
-        v.$messages.compactMap { $0.first }
-            .removeDuplicates { $0.id == $1.id }
-            .sink { [weak self] m in
-                guard m.severity.rawValue <= MAVSeverity.warning.rawValue else { return }
-                self?.say(m.text, minInterval: 60) // ArduPilot repeats PreArm text every 30 s
+        // BUG-037 (round 3): VehicleModel publishes STATUSTEXT in batches (at most 2 Hz), so speak every new warning
+        // in the batch, oldest first, not only the newest one. At most 3 per batch so a flood can't queue minutes of speech.
+        lastMessageID = v.messages.first?.id
+        v.$messages
+            .sink { [weak self] list in
+                guard let self else { return }
+                var fresh: [StatusMessage] = []
+                for m in list {
+                    if m.id == self.lastMessageID { break }
+                    fresh.append(m)
+                }
+                if let first = list.first { self.lastMessageID = first.id }
+                let warnings = fresh.filter { $0.severity.rawValue <= MAVSeverity.warning.rawValue }
+                for m in warnings.prefix(3).reversed() {
+                    self.say(m.text, minInterval: 60) // ArduPilot repeats PreArm text every 30 s
+                }
             }
             .store(in: &bag)
         v.$leakDetected.removeDuplicates()

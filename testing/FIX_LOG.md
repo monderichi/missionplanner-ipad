@@ -126,3 +126,30 @@ RSS flat (322 → 321 MB; before +24 MB). Target < 15 % not reached: the remaini
 batch (next step: split VehicleModel into smaller ObservableObjects so the map/status don't redraw with the HUD).
 
 Verified after these: unit 67/67, fake drone 86/86, SITL `sitl_log_download` + `sitl_arm` 2/2.
+
+## Round 3 (branch `bug_037_split_model`, 2026-11-28): written on Windows, NOT compiled or measured yet
+
+BUG-037 (still PARTIAL until measured): the whole view tree no longer redraws with every 10 Hz batch.
+- New `App/Vehicle/FastTelemetry.swift` holds the high-rate fields: attitude, VFR_HUD, position, trail, RC/servo,
+  vibration and ESCs. `VehicleModel.fast` owns it, and VehicleModel keeps read-only forwarders with the old names.
+- Only the views that display these fields observe `FastTelemetry`: `HUDContainer` (the HUD, extracted from RootView),
+  Quick/Status tabs, checklist, servo, ESC, radio/modes/prearm/servo setup pages, and the map. RootView no longer observes
+  the vehicle.
+- VehicleModel publishes only real changes:
+  - low-rate fields (heartbeat, GPS, SYS_STATUS, EKF, home, radio, SCALED_PRESSURE2, mission current) are assigned
+    only when they change;
+  - `lastHeartbeat` is no longer `@Published`;
+  - STATUSTEXT is buffered and `messages` is published at most every 0.5 s (and from the 1 Hz tick). Before, a flood
+    published it on every batch. `reset()` flushes the buffer first (review R3-2), so a replay's last warnings
+    are never spoken as if they came from the next link (BUG-025).
+- `SpeechAlerts` speaks every new warning in a batch (at most 3), not only the newest.
+- `MapCanvas.updateUIView` caches what it last drew (vehicle key, home, trail count + last point, traffic). An
+  unchanged update does no MapKit work, and a full 3000-point trail now keeps redrawing while it scrolls.
+
+Stale names in the Rover tuning list: `WP_OVERSHOOT` and `TURN_MAX_G` removed (not in Rover 4.7.3; `ATC_TURN_MAX_G` is the
+current name). `tools/audit_params.py`: 0 names in no firmware.
+
+Reviews: `testing/REVIEW_R3_1.md` (APPROVED; its optional notes 1–2 were applied here) and `testing/REVIEW_R3_2.md`
+(1 required change, the `reset()` flush: applied). Proof still needed on the Mac:
+unit tests, harness `run.py -j 4 all`, `catalyst.sh build` + `uitest`, and `catalyst.sh perf
+BreakTestUITests2/test_perf_highRateAndFlood` (target < 15 %; round 2 was 26 % / 32 % per phase).
