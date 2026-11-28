@@ -41,7 +41,7 @@ The user's original request is kept verbatim at the end; the version below is th
   "Re-test after pull" section (status per bug + new bugs).
 - [x] **4. Commit** the final review files on the test branch.
 - [x] **5. Push** to a new remote branch **`bug_fixes`** (created from the reviewed test branch).
-- [ ] **6. Fix all bugs** on `bug_fixes`, highest severity first, re-running the relevant tests after each fix and the
+- [x] **6. Fix all bugs** on `bug_fixes`, highest severity first, re-running the relevant tests after each fix and the
   full suite at the end. Each fix: code + comment + regression test (unit test, harness scenario or UI test) +
   `testing/FIX_LOG.md` entry + `TESTING_RESULTS.md` status → FIXED. Keep CI green (GitHub Actions builds on push to main;
   check the PR's checks). Commit per bug or small group; push regularly.

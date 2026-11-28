@@ -866,7 +866,7 @@ Status per item: FIXED = code change + passing test; PARTIAL = improved, remaind
 | BUG-012 stale after disconnect | FIXED | BUG-034 param metadata | FIXED (99.9 % coverage of 4.7.3) |
 | BUG-013 confirm while armed | FIXED | BUG-035 accessibility | PARTIAL (labels, ids, top-bar contrast) |
 | BUG-014 servo guard | FIXED | BUG-036 locale grouping | FIXED |
-| BUG-015 GPS-loss stale position | FIXED | BUG-037 UI CPU | PARTIAL (50 ms batching; re-measure on an iPad) |
+| BUG-015 GPS-loss stale position | FIXED | BUG-037 UI CPU | PARTIAL (50 ms batching: 48 % → 34 % CPU at 50 Hz; target < 15 %) |
 | BUG-016 Link % | FIXED | BUG-038 NaN stick | FIXED |
 | BUG-017 lost ACK reporting | FIXED | BUG-039 ADS-B limits | FIXED |
 | BUG-018 battery calibration | FIXED | TEST-030 CI + app-layer tests | FIXED (CI `break-test` job) |
