@@ -35,7 +35,8 @@ public final class CommandSession {
         var attempts: Int
         var lastSent: TimeInterval
         /// BUG-002: ACKs before this time may belong to the command this one superseded (COMMAND_ACK has no request id):
-        /// they don't resolve it. It is confirmed by a later ACK, or by vehicle state (`confirmByState`).
+        /// they don't resolve it. It is confirmed by a later ACK, or by vehicle state (`confirmByState`). Set only when an
+        /// arm/disarm or mode command supersedes the in-flight one.
         var ambiguousUntil: TimeInterval = -.infinity
     }
     private var pending: [UInt16: Pending] = [:]

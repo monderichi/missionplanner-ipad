@@ -49,8 +49,8 @@ The user's original request is kept verbatim at the end; the version below is th
 - [x] **8. Independent review**: a fresh agent (no access to this conversation) reviews the PR diff for correctness,
   safety and regressions and writes `testing/REVIEW_<n>.md`.
 - [x] **9. Apply** the reviewer's required changes (if any), with tests, and push.
-- [ ] **10. Re-run the independent review** on the updated PR.
-- [ ] **11. If the review is OK**: commit, push, merge the PR into `main` (method per "Decisions"); otherwise go back
+- [x] **10. Re-run the independent review** on the updated PR.
+- [x] **11. If the review is OK**: commit, push, merge the PR into `main` (method per "Decisions"); otherwise go back
   to step 9. Afterwards: clean up large temporary data and write the final summary in this file and in the PR.
 
 ## Decisions (filled in from the user's answers and during the run)
@@ -123,3 +123,6 @@ The user's original request is kept verbatim at the end; the version below is th
 - 09:15 User: no GitHub Actions minutes. Cancelled the running CI; `break-test` job made manual-only; pushes now use `[skip ci]`
   and verification is local only. Review 5: CHANGES REQUIRED (1: the post-resend ACK window cascaded double sends down the
   queue). Window removed, unsent guard kept, test added. Unit 64/64, fake drone 86/86, SITL subset 3/3. Next: review 6.
+- 09:30 Review 6: APPROVED (REVIEW_5 item resolved; the new queue test fails on the old code, passes now). Step 11: squash-merged
+  PR #1 into main as 0.5.0 with `[skip ci]` (no Actions minutes; start "Build Sideloadly IPA" manually for the IPA). Cleanup done:
+  testing/.build, testing/artifacts, test crash reports removed; Xcode, testing/.sitl, testing/.venv kept.

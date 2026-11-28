@@ -37,7 +37,7 @@ fix is listed in `testing/FIX_LOG.md` with its cause, change and proof. Code cha
 | Mac Catalyst UI tests (`testing/sim/catalyst.sh uitest`) | the former crash tests and BUG-001/-008/-013 pass; remaining failures are XCUITest limits (ADS-B labels, list scrolling) |
 
 Independent reviews: `testing/REVIEW_1.md` (7 required changes), `testing/REVIEW_2.md` (2), `testing/REVIEW_3.md` (2),
-`testing/REVIEW_4.md` (1) and `testing/REVIEW_5.md` (1), all applied, see `testing/FIX_LOG.md`.
+`testing/REVIEW_4.md` (1) and `testing/REVIEW_5.md` (1), all applied; `testing/REVIEW_6.md`: **APPROVED**, see `testing/FIX_LOG.md`.
 New CI job `break-test` runs the harness scenarios and probes (manual workflow runs only, to save macOS minutes).
 
 ### Known remaining (documented)
