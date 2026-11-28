@@ -6,7 +6,7 @@ import MAVLinkKit
 import SwiftUI
 
 struct RoverSetupPage: View {
-    @EnvironmentObject var vehicle: VehicleModel
+    @EnvironmentObject var fast: FastTelemetry // BUG-037 (round 3): only the live servo output is read
     @EnvironmentObject var params: ParameterStore
 
     /// SERVOn_FUNCTION values that matter for driving.
@@ -31,7 +31,7 @@ struct RoverSetupPage: View {
 
     private func pwm(_ index: Int) -> Int {
         let i = index - 1
-        return i >= 0 && i < vehicle.servoOutputs.count ? Int(vehicle.servoOutputs[i]) : 0
+        return i >= 0 && i < fast.servoOutputs.count ? Int(fast.servoOutputs[i]) : 0
     }
 
     private func reversed(_ index: Int) -> Bool {

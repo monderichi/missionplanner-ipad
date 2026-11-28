@@ -22,6 +22,7 @@ struct QuickTile: View {
 
 struct QuickView: View {
     @EnvironmentObject var vehicle: VehicleModel
+    @EnvironmentObject var fast: FastTelemetry // BUG-037 (round 3): live values (attitude, speeds, position, RC, vibration) come from here
     private static let defaultsKey = "quick.tiles"
     private static let defaultTiles = ["alt", "gs", "wpdist", "climb", "yaw", "batv"]
     /// ArduSub defaults: depth, heading, water temperature, battery, vertical speed, ground speed.
@@ -88,6 +89,7 @@ struct QuickView: View {
 
 struct StatusListView: View {
     @EnvironmentObject var vehicle: VehicleModel
+    @EnvironmentObject var fast: FastTelemetry // BUG-037 (round 3): live values (attitude, speeds, position, RC, vibration) come from here
     @EnvironmentObject var link: LinkManager
 
     var body: some View {
@@ -98,21 +100,21 @@ struct StatusListView: View {
                 row("Mode", vehicle.modeName)
                 row("Armed", vehicle.armed ? "Yes" : "No")
                 row("Current WP", "\(vehicle.currentWaypoint)")
-                row("Throttle", "\(vehicle.throttle) %")
+                row("Throttle", "\(fast.throttle) %")
             }
             Section("Attitude") {
-                row("Roll", String(format: "%.1f°", vehicle.roll))
-                row("Pitch", String(format: "%.1f°", vehicle.pitch))
-                row("Yaw", String(format: "%.1f°", vehicle.yaw))
-                row("Airspeed", String(format: "%.1f m/s", vehicle.airspeed))
-                row("Alt (MSL)", String(format: "%.1f m", vehicle.altitudeMSL))
+                row("Roll", String(format: "%.1f°", fast.roll))
+                row("Pitch", String(format: "%.1f°", fast.pitch))
+                row("Yaw", String(format: "%.1f°", fast.yaw))
+                row("Airspeed", String(format: "%.1f m/s", fast.airspeed))
+                row("Alt (MSL)", String(format: "%.1f m", fast.altitudeMSL))
             }
             Section("GPS") {
                 row("Fix", vehicle.gpsFixName)
                 row("Satellites", "\(vehicle.satellites)")
                 row("HDOP", String(format: "%.2f", vehicle.hdop))
-                row("Lat", vehicle.latitude.map { String(format: "%.7f", $0) } ?? "—")
-                row("Lon", vehicle.longitude.map { String(format: "%.7f", $0) } ?? "—")
+                row("Lat", fast.latitude.map { String(format: "%.7f", $0) } ?? "—")
+                row("Lon", fast.longitude.map { String(format: "%.7f", $0) } ?? "—")
             }
             Section("Battery") {
                 row("Voltage", String(format: "%.2f V", vehicle.batteryVoltage))
@@ -122,8 +124,8 @@ struct StatusListView: View {
             Section("EKF / Vibration") {
                 row("EKF flags", String(format: "0x%04X", vehicle.ekfFlags))
                 row("Variances v/pH/pV/c/t", vehicle.ekfVariances.map { String(format: "%.2f", $0) }.joined(separator: " / "))
-                row("Vibe X/Y/Z", vehicle.vibration.map { String(format: "%.1f", $0) }.joined(separator: " / "))
-                row("Clipping 0/1/2", vehicle.clipping.map { "\($0)" }.joined(separator: " / "))
+                row("Vibe X/Y/Z", fast.vibration.map { String(format: "%.1f", $0) }.joined(separator: " / "))
+                row("Clipping 0/1/2", fast.clipping.map { "\($0)" }.joined(separator: " / "))
             }
             ESCStatusSection()
             Section("Link") {

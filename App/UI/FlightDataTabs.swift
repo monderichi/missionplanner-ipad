@@ -11,6 +11,7 @@ import SwiftUI
 /// signal > 95%, battery voltage, mode, altitude < 5 m) plus the manual items.
 struct ChecklistView: View {
     @EnvironmentObject var vehicle: VehicleModel
+    @EnvironmentObject var fast: FastTelemetry // BUG-037 (round 3)
     @EnvironmentObject var link: LinkManager
     @EnvironmentObject var params: ParameterStore
     @AppStorage("checklist.minVolts") private var minVolts = 0.0
@@ -48,7 +49,7 @@ struct ChecklistView: View {
                 auto("Battery", value: String(format: "%.2f V (min %.1f)", vehicle.batteryVoltage, batteryThreshold),
                      ok: batteryThreshold > 0 ? vehicle.batteryVoltage > batteryThreshold : vehicle.batteryVoltage > 0)
                 auto("Mode", value: vehicle.modeName, ok: nil)
-                auto("Altitude", value: String(format: "%.1f m (< 5 m)", vehicle.relativeAltitude), ok: abs(vehicle.relativeAltitude) < 5)
+                auto("Altitude", value: String(format: "%.1f m (< 5 m)", fast.relativeAltitude), ok: abs(fast.relativeAltitude) < 5)
                 auto("EKF", value: vehicle.ekfVariances.allSatisfy({ $0 < 0.8 }) ? "OK" : "High variance",
                      ok: vehicle.ekfVariances.allSatisfy { $0 < 0.8 })
                 auto("Pre-arm", value: vehicle.sensorsHealthy & (1 << 28) != 0 ? "Passing" : "Not passing",
@@ -96,14 +97,14 @@ struct ChecklistView: View {
 // MARK: - Servo / relay
 
 struct ServoView: View {
-    @EnvironmentObject var vehicle: VehicleModel
+    @EnvironmentObject var fast: FastTelemetry // BUG-037 (round 3): only the servo outputs are read, so observe only the fast model
     @EnvironmentObject var commands: CommandCenter
     @EnvironmentObject var params: ParameterStore
     @State private var toggled: Set<Int> = []
     @State private var relays: Set<Int> = []
 
     private var channels: Int {
-        let used = vehicle.servoOutputs.lastIndex(where: { $0 > 0 }).map { $0 + 1 } ?? 8
+        let used = fast.servoOutputs.lastIndex(where: { $0 > 0 }).map { $0 + 1 } ?? 8
         return max(8, used)
     }
 
@@ -125,7 +126,7 @@ struct ServoView: View {
             Text("Overriding an output that drives a motor can spin it. Only use outputs set to a servo, relay or RCPassThru function.")
                 .font(.caption).foregroundColor(.orange)
             ForEach(1...channels, id: \.self) { ch in
-                let out = vehicle.servoOutputs[safe: ch - 1] ?? 0
+                let out = fast.servoOutputs[safe: ch - 1] ?? 0
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text("Out \(ch)").font(.callout.bold()).frame(width: 56, alignment: .leading)
@@ -180,12 +181,13 @@ struct ServoView: View {
 
 struct ESCStatusSection: View {
     @EnvironmentObject var vehicle: VehicleModel
+    @EnvironmentObject var fast: FastTelemetry // BUG-037 (round 3)
 
     var body: some View {
-        if vehicle.escCount > 0 {
+        if fast.escCount > 0 {
             Section("ESC telemetry") {
-                ForEach(0..<vehicle.escCount, id: \.self) { i in
-                    let e = vehicle.escs[i]
+                ForEach(0..<fast.escCount, id: \.self) { i in
+                    let e = fast.escs[i]
                     if e.rpm > 0 || e.temperature > 0 || e.voltage > 0 {
                         HStack {
                             Text("Motor \(i + 1)")

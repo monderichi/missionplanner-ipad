@@ -74,6 +74,8 @@ final class TrafficAnnotationView: MKAnnotationView {
 
 struct MapCanvas: UIViewRepresentable {
     @ObservedObject var vehicle: VehicleModel
+    /// BUG-037 (round 3): position, heading and trail come from FastTelemetry; the callers pass `vehicle.fast`.
+    @ObservedObject var fast: FastTelemetry
     @ObservedObject var mission: MissionStore
     var tileSource: TileSource
     var editTarget: MapEditTarget = .none
@@ -136,6 +138,15 @@ struct MapCanvas: UIViewRepresentable {
         private var extraAnnotations: [MapItemAnnotation] = []
         private var extraOverlays: [MKOverlay] = []
         private var drawnExtras: [Double]?
+        // BUG-037 (round 3): what was last applied, so a 10 Hz update that changed nothing does no MapKit work.
+        private var vehicleAdded = false
+        private var homeAdded = false
+        private var drawnVehicleKey: [Double]?
+        private var drawnHome: GeoPoint?
+        private var trailLast: GeoPoint?
+        private var drawnTraffic: [UInt32: VehicleModel.Traffic] = [:]
+        private var drawnTrafficMe: GeoPoint?
+        private var drawnTrafficMapHeading = -1.0
 
         /// Red vehicle arrow, rendered once into a bitmap so no tint can turn it black.
         static let vehicleImage: UIImage? = {
@@ -212,36 +223,61 @@ struct MapCanvas: UIViewRepresentable {
             let v = parent.vehicle
             // BUG-004: MKMapView throws (uncaught NSException) for an invalid centre; never pass one.
             if let p = v.position, CLLocationCoordinate2DIsValid(CLLocationCoordinate2D(latitude: p.latitude, longitude: p.longitude)) {
-                let c = CLLocationCoordinate2D(latitude: p.latitude, longitude: p.longitude)
-                vehicleAnnotation.coordinate = c
-                vehicleAnnotation.heading = v.yaw
-                if !map.annotations.contains(where: { $0 === vehicleAnnotation }) { map.addAnnotation(vehicleAnnotation) }
-                if let view = map.view(for: vehicleAnnotation) {
-                    let marker = Coordinator.vehicleMarker(for: v.vehicleType)
-                    if view.image !== marker { view.image = marker }
-                    let angle = (v.yaw - map.camera.heading) * .pi / 180
-                    if angle.isFinite { view.transform = CGAffineTransform(rotationAngle: CGFloat(angle)) } // BUG-003
-                    view.alpha = v.positionStale ? 0.35 : 1 // BUG-015: a stale position is shown faded
+                // BUG-037 (round 3): skip everything when position, yaw, type, staleness, follow and map rotation are unchanged
+                // (the NaN-safe bit patterns make the comparison exact).
+                let key: [Double] = [p.latitude, p.longitude, v.yaw, Double(v.vehicleType), v.positionStale ? 1 : 0,
+                                     parent.follow ? 1 : 0, map.camera.heading]
+                let keyBits = key.map { $0.bitPattern }
+                if vehicleAdded, let d = drawnVehicleKey, d.map({ $0.bitPattern }) == keyBits {
+                    // unchanged
+                } else {
+                    let c = CLLocationCoordinate2D(latitude: p.latitude, longitude: p.longitude)
+                    if vehicleAnnotation.coordinate.latitude != c.latitude || vehicleAnnotation.coordinate.longitude != c.longitude {
+                        vehicleAnnotation.coordinate = c
+                    }
+                    vehicleAnnotation.heading = v.yaw
+                    if !vehicleAdded {
+                        map.addAnnotation(vehicleAnnotation)
+                        vehicleAdded = true
+                    }
+                    if let view = map.view(for: vehicleAnnotation) {
+                        let marker = Coordinator.vehicleMarker(for: v.vehicleType)
+                        if view.image !== marker { view.image = marker }
+                        let angle = (v.yaw - map.camera.heading) * .pi / 180
+                        if angle.isFinite { view.transform = CGAffineTransform(rotationAngle: CGFloat(angle)) } // BUG-003
+                        view.alpha = v.positionStale ? 0.35 : 1 // BUG-015: a stale position is shown faded
+                        drawnVehicleKey = key // only once the view exists; otherwise retry on the next update
+                    }
+                    if !centeredOnce {
+                        centeredOnce = true
+                        map.setRegion(MKCoordinateRegion(center: c, latitudinalMeters: 400, longitudinalMeters: 400), animated: false)
+                    } else if parent.follow {
+                        map.setCenter(c, animated: false)
+                    }
                 }
-                if !centeredOnce {
-                    centeredOnce = true
-                    map.setRegion(MKCoordinateRegion(center: c, latitudinalMeters: 400, longitudinalMeters: 400), animated: false)
-                } else if parent.follow {
-                    map.setCenter(c, animated: false)
-                }
-            } else if map.annotations.contains(where: { $0 === vehicleAnnotation }) {
+            } else if vehicleAdded {
                 map.removeAnnotation(vehicleAnnotation)
+                vehicleAdded = false
+                drawnVehicleKey = nil
             }
             if let h = v.home, CLLocationCoordinate2DIsValid(CLLocationCoordinate2D(latitude: h.latitude, longitude: h.longitude)) {
-                homeAnnotation.coordinate = CLLocationCoordinate2D(latitude: h.latitude, longitude: h.longitude)
-                if !map.annotations.contains(where: { $0 === homeAnnotation }) { map.addAnnotation(homeAnnotation) }
+                if !homeAdded || drawnHome != h {
+                    drawnHome = h
+                    homeAnnotation.coordinate = CLLocationCoordinate2D(latitude: h.latitude, longitude: h.longitude)
+                    if !homeAdded {
+                        map.addAnnotation(homeAnnotation)
+                        homeAdded = true
+                    }
+                }
             }
         }
 
         private func syncTrail(_ map: MKMapView) {
-            let trail = parent.vehicle.trail
-            guard trail.count != trailCount else { return }
+            let trail = parent.fast.trail
+            // BUG-037 (round 3): compare the last point too, because a full trail (maxTrail) keeps its count while it scrolls.
+            guard trail.count != trailCount || trail.last != trailLast else { return }
             trailCount = trail.count
+            trailLast = trail.last
             if let t = trailOverlay { map.removeOverlay(t) }
             trailOverlay = nil
             guard trail.count > 1 else { return }
@@ -255,7 +291,7 @@ struct MapCanvas: UIViewRepresentable {
 
         private func trafficText(_ t: VehicleModel.Traffic) -> String {
             var s = "\(t.callsign) \(Int(t.altitude.rounded())) m"
-            if let me = parent.vehicle.position {
+            if let me = parent.fast.position {
                 let d = Geo.distance(me, t.position)
                 s += d >= 1000 ? String(format: " · %.1f km", d / 1000) : String(format: " · %.0f m", d)
             }
@@ -264,6 +300,16 @@ struct MapCanvas: UIViewRepresentable {
 
         private func syncTraffic(_ map: MKMapView) {
             let traffic = parent.vehicle.traffic
+            // BUG-037 (round 3): nothing to do while there is no traffic, or while traffic, my position (to 5 m) and the map rotation are unchanged.
+            if traffic.isEmpty && trafficAnnotations.isEmpty { return }
+            let me = parent.fast.position
+            let mapHeading = map.camera.heading
+            let meMoved: Bool
+            if let a = me, let b = drawnTrafficMe { meMoved = Geo.distance(a, b) > 5 } else { meMoved = (me == nil) != (drawnTrafficMe == nil) }
+            if traffic == drawnTraffic && !meMoved && mapHeading == drawnTrafficMapHeading { return }
+            drawnTraffic = traffic
+            drawnTrafficMe = me
+            drawnTrafficMapHeading = mapHeading
             for (icao, a) in trafficAnnotations where traffic[icao] == nil {
                 map.removeAnnotation(a)
                 trafficAnnotations[icao] = nil

@@ -5,6 +5,7 @@ import MAVLinkKit
 import SwiftUI
 
 struct FlightMapView: View {
+    // BUG-037 (round 3): observes only the low-rate vehicle state; the map gets `vehicle.fast` and observes it itself.
     @EnvironmentObject var vehicle: VehicleModel
     @EnvironmentObject var mission: MissionStore
     @EnvironmentObject var commands: CommandCenter
@@ -29,7 +30,7 @@ struct FlightMapView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            MapCanvas(vehicle: vehicle, mission: mission, tileSource: source, follow: follow,
+            MapCanvas(vehicle: vehicle, fast: vehicle.fast, mission: mission, tileSource: source, follow: follow,
                       measureStart: measureStart, measureEnd: measureEnd,
                       onLongPress: { p in
                           if measureStart != nil && measureEnd == nil {

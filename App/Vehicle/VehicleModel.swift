@@ -16,6 +16,10 @@ struct StatusMessage: Identifiable {
 }
 
 final class VehicleModel: ObservableObject {
+    /// BUG-037 (round 3): the high-rate fields (attitude, VFR_HUD, position, trail, RC/servo, vibration, ESCs) live in
+    /// their own object so a 10 Hz batch only redraws the views that show them, not everything observing the vehicle.
+    let fast = FastTelemetry()
+
     // identity (from HEARTBEAT)
     @Published private(set) var systemID: UInt8?
     @Published private(set) var componentID: UInt8 = 1
@@ -24,27 +28,29 @@ final class VehicleModel: ObservableObject {
     @Published private(set) var armed = false
     @Published private(set) var customMode: UInt32 = 0
     @Published private(set) var systemStatus: UInt8 = 0
-    @Published private(set) var lastHeartbeat: Date?
+    /// BUG-037 (round 3): not @Published: it changes on every heartbeat and only CommandCenter and tick() read it.
+    private(set) var lastHeartbeat: Date?
     /// True while heartbeats arrive (Mission Planner flags the link lost after a few seconds of silence).
     @Published private(set) var heartbeatAlive = false
 
+    // BUG-037 (round 3): moved to FastTelemetry (read-only forwarders keep the old names working).
     // attitude (ATTITUDE), degrees
-    @Published private(set) var roll = 0.0
-    @Published private(set) var pitch = 0.0
-    @Published private(set) var yaw = 0.0
+    var roll: Double { fast.roll }
+    var pitch: Double { fast.pitch }
+    var yaw: Double { fast.yaw }
 
     // VFR_HUD
-    @Published private(set) var airspeed = 0.0
-    @Published private(set) var groundspeed = 0.0
-    @Published private(set) var heading = 0.0
-    @Published private(set) var throttle = 0
-    @Published private(set) var altitudeMSL = 0.0
-    @Published private(set) var climbRate = 0.0
+    var airspeed: Double { fast.airspeed }
+    var groundspeed: Double { fast.groundspeed }
+    var heading: Double { fast.heading }
+    var throttle: Int { fast.throttle }
+    var altitudeMSL: Double { fast.altitudeMSL }
+    var climbRate: Double { fast.climbRate }
 
     // GLOBAL_POSITION_INT
-    @Published private(set) var latitude: Double?
-    @Published private(set) var longitude: Double?
-    @Published private(set) var relativeAltitude = 0.0
+    var latitude: Double? { fast.latitude }
+    var longitude: Double? { fast.longitude }
+    var relativeAltitude: Double { fast.relativeAltitude }
 
     // GPS_RAW_INT
     @Published private(set) var gpsFixType: UInt8 = 0
@@ -63,8 +69,9 @@ final class VehicleModel: ObservableObject {
     // EKF_STATUS_REPORT / VIBRATION
     @Published private(set) var ekfFlags: UInt16 = 0
     @Published private(set) var ekfVariances: [Double] = [0, 0, 0, 0, 0] // vel, posH, posV, compass, terrain
-    @Published private(set) var vibration: [Double] = [0, 0, 0]
-    @Published private(set) var clipping: [UInt32] = [0, 0, 0]
+    // BUG-037 (round 3): vibration/clipping live in FastTelemetry.
+    var vibration: [Double] { fast.vibration }
+    var clipping: [UInt32] { fast.clipping }
 
     // RADIO_STATUS
     @Published private(set) var radioRSSI: Int?
@@ -77,8 +84,15 @@ final class VehicleModel: ObservableObject {
     @Published private(set) var leakDetected = false
 
     @Published private(set) var messages: [StatusMessage] = []
-    /// BUG-037 (round 2): not @Published: it changes on every packet. Views that show it re-read it whenever the batch
-    /// publishes anything else (attitude, heartbeat), at most 10 times a second.
+    /// BUG-037 (round 3): STATUSTEXT received since the last publish of `messages`, newest first. A flood (hundreds a
+    /// second) used to publish `messages` on every 10 Hz batch and redraw every view observing the vehicle; now
+    /// `messages` is published at most twice a second (a message after a quiet spell shows at once; later ones in a
+    /// burst within about a second, from the 1 Hz tick). reset() flushes the buffer.
+    private var pendingMessages: [StatusMessage] = []
+    private var lastMessagesPublish = Date.distantPast
+    static let messagesPublishInterval: TimeInterval = 0.5
+    /// BUG-037 (round 2): not @Published: it changes on every packet. Views that show it re-read it whenever the
+    /// vehicle publishes anything else (about once a second; Diagnostics also refreshes on its own).
     private(set) var messageCounts: [String: Int] = [:]
 
     // HOME_POSITION
@@ -87,13 +101,15 @@ final class VehicleModel: ObservableObject {
     @Published private(set) var homeAltitudeMSL = 0.0
 
     /// Flight path (appended when the vehicle moved more than ~1 m), newest last.
-    @Published private(set) var trail: [GeoPoint] = []
+    /// BUG-037 (round 3): stored in FastTelemetry.
+    var trail: [GeoPoint] { fast.trail }
     static let maxTrail = 3000
 
     // RC_CHANNELS / SERVO_OUTPUT_RAW (PWM, index 0 = channel 1)
-    @Published private(set) var rcChannels: [UInt16] = Array(repeating: 0, count: 18)
-    @Published private(set) var rcChannelCount = 0
-    @Published private(set) var servoOutputs: [UInt16] = Array(repeating: 0, count: 16)
+    // BUG-037 (round 3): stored in FastTelemetry.
+    var rcChannels: [UInt16] { fast.rcChannels }
+    var rcChannelCount: Int { fast.rcChannelCount }
+    var servoOutputs: [UInt16] { fast.servoOutputs }
 
     // SYS_STATUS sensor bitmasks (MAV_SYS_STATUS_SENSOR)
     @Published private(set) var sensorsPresent: UInt32 = 0
@@ -116,8 +132,9 @@ final class VehicleModel: ObservableObject {
         var voltage: Double = 0      // V
         var current: Double = 0      // A
     }
-    @Published private(set) var escs: [ESCInfo] = Array(repeating: ESCInfo(), count: 8)
-    @Published private(set) var escCount = 0
+    // BUG-037 (round 3): stored in FastTelemetry.
+    var escs: [ESCInfo] { fast.escs }
+    var escCount: Int { fast.escCount }
 
     // BATTERY_STATUS (first battery)
     @Published private(set) var batteryConsumedMah: Int?
@@ -195,17 +212,20 @@ final class VehicleModel: ObservableObject {
     }
 
     func reset() {
+        // BUG-037 (round 3) / BUG-025: publish buffered STATUSTEXT now (speech is still muted during replay), so a
+        // burst's tail can't surface, and be spoken, as if it came from the next link.
+        flushMessages(force: true)
         systemID = nil
         heartbeatAlive = false
         lastHeartbeat = nil
-        latitude = nil
-        longitude = nil
+        fast.latitude = nil
+        fast.longitude = nil
         messageCounts = [:]
         statusChunks = [:]
         homeLatitude = nil
         homeLongitude = nil
-        trail = []
-        rcChannelCount = 0
+        fast.trail = []
+        fast.rcChannelCount = 0
         magCalProgress = [:]
         magCalReports = [:]
         lastReachedWaypoint = nil
@@ -216,8 +236,8 @@ final class VehicleModel: ObservableObject {
         // BUG-012: clear the live state too, so nothing (ARMED, mode, attitude, battery) looks live after Disconnect.
         armed = false
         customMode = 0
-        roll = 0; pitch = 0; yaw = 0
-        groundspeed = 0; airspeed = 0; climbRate = 0; relativeAltitude = 0
+        fast.roll = 0; fast.pitch = 0; fast.yaw = 0
+        fast.groundspeed = 0; fast.airspeed = 0; fast.climbRate = 0; fast.relativeAltitude = 0
         batteryVoltage = 0; batteryCurrent = 0; batteryRemaining = -1
         gpsFixType = 0; satellites = 0
         lastPosition = nil; positionStale = false
@@ -226,18 +246,20 @@ final class VehicleModel: ObservableObject {
         waterTemperature = nil
     }
 
-    func clearTrail() { trail = [] }
+    func clearTrail() { fast.trail = [] }
 
     func clearLeak() { leakDetected = false }
 
     private func updateESCs(base: Int, rpm: [UInt16], temp: [UInt8], volt: [UInt16], curr: [UInt16]) {
-        var list = escs
+        var list = fast.escs
         for i in 0..<4 {
             list[base + i] = ESCInfo(rpm: Int(rpm[i]), temperature: Int(temp[i]),
                                      voltage: Double(volt[i]) / 100, current: Double(curr[i]) / 100)
         }
-        escs = list
-        escCount = max(escCount, base + 4)
+        // BUG-037 (round 3): ESC telemetry repeats unchanged values; don't publish them
+        if list != fast.escs { fast.escs = list }
+        let count = max(fast.escCount, base + 4)
+        if count != fast.escCount { fast.escCount = count }
     }
 
     func resetMagCal() {
@@ -251,8 +273,7 @@ final class VehicleModel: ObservableObject {
     }
 
     var position: GeoPoint? {
-        guard let la = latitude, let lo = longitude else { return nil }
-        return GeoPoint(latitude: la, longitude: lo)
+        fast.position
     }
 
     /// Feed packets from a .tlog replay (same handling as live, no sysid lock-in surprises).
@@ -263,6 +284,7 @@ final class VehicleModel: ObservableObject {
 
     /// Called ~1 Hz by the link manager.
     func tick(now: Date = Date()) {
+        flushMessages(force: true) // BUG-037 (round 3)
         let alive = lastHeartbeat.map { now.timeIntervalSince($0) < Self.heartbeatTimeout } ?? false
         if alive != heartbeatAlive { heartbeatAlive = alive }
         let stale = alive && (lastAttitude.map { now.timeIntervalSince($0) > Self.attitudeTimeout } ?? true)
@@ -310,11 +332,13 @@ final class VehicleModel: ObservableObject {
             // review 2: mark the link alive first, so an arm/disarm that happened during a dropout is still announced
             lastHeartbeat = Date()
             if !heartbeatAlive { heartbeatAlive = true }
-            vehicleType = hb.type
-            autopilot = hb.autopilot
-            armed = (hb.baseMode & MAVModeFlag.safetyArmed) != 0
-            customMode = hb.customMode
-            systemStatus = hb.systemStatus
+            // BUG-037 (round 3): assign only on change, @Published fires even for equal values
+            if vehicleType != hb.type { vehicleType = hb.type }
+            if autopilot != hb.autopilot { autopilot = hb.autopilot }
+            let isArmed = (hb.baseMode & MAVModeFlag.safetyArmed) != 0
+            if armed != isArmed { armed = isArmed }
+            if customMode != hb.customMode { customMode = hb.customMode }
+            if systemStatus != hb.systemStatus { systemStatus = hb.systemStatus }
             return newVehicle
         }
 
@@ -351,19 +375,19 @@ final class VehicleModel: ObservableObject {
             // NO ATTITUDE DATA instead of showing garbage.
             guard Self.plausibleAngle(m.roll), Self.plausibleAngle(m.pitch), Self.plausibleAngle(m.yaw) else { break }
             lastAttitude = Date()
-            roll = Double(m.roll) * 180 / .pi
-            pitch = Double(m.pitch) * 180 / .pi
-            yaw = Self.wrap360(Double(m.yaw) * 180 / .pi)
+            fast.roll = Double(m.roll) * 180 / .pi
+            fast.pitch = Double(m.pitch) * 180 / .pi
+            fast.yaw = Self.wrap360(Double(m.yaw) * 180 / .pi)
 
         case MAV.VfrHud.mavInfo.id:
             guard let m = packet.decode(MAV.VfrHud.self) else { break }
             // BUG-003: keep the last good value for any non-finite / impossible field.
-            if Self.plausible(m.airspeed, 1000) { airspeed = Double(m.airspeed) }
-            if Self.plausible(m.groundspeed, 1000) { groundspeed = Double(m.groundspeed) }
-            heading = Double(m.heading)
-            throttle = Int(m.throttle)
-            if Self.plausible(m.alt, 100_000) { altitudeMSL = Double(m.alt) }
-            if Self.plausible(m.climb, 1000) { climbRate = Double(m.climb) }
+            if Self.plausible(m.airspeed, 1000) { fast.airspeed = Double(m.airspeed) }
+            if Self.plausible(m.groundspeed, 1000) { fast.groundspeed = Double(m.groundspeed) }
+            fast.heading = Double(m.heading)
+            fast.throttle = Int(m.throttle)
+            if Self.plausible(m.alt, 100_000) { fast.altitudeMSL = Double(m.alt) }
+            if Self.plausible(m.climb, 1000) { fast.climbRate = Double(m.climb) }
 
         case MAV.GlobalPositionInt.mavInfo.id:
             guard let m = packet.decode(MAV.GlobalPositionInt.self) else { break }
@@ -371,71 +395,89 @@ final class VehicleModel: ObservableObject {
             if (m.lat != 0 || m.lon != 0) && abs(Int(m.lat)) <= 900_000_000 && abs(Int(m.lon)) <= 1_800_000_000 {
                 let p = GeoPoint(latitude: Double(m.lat) / 1e7, longitude: Double(m.lon) / 1e7)
                 lastPosition = Date() // BUG-015
-                latitude = p.latitude
-                longitude = p.longitude
-                if let last = trail.last {
+                fast.latitude = p.latitude
+                fast.longitude = p.longitude
+                if let last = fast.trail.last {
                     if Geo.distance(last, p) > 1 {
-                        trail.append(p)
-                        if trail.count > Self.maxTrail { trail.removeFirst(trail.count - Self.maxTrail) }
+                        fast.trail.append(p)
+                        if fast.trail.count > Self.maxTrail { fast.trail.removeFirst(fast.trail.count - Self.maxTrail) }
                     }
                 } else {
-                    trail.append(p)
+                    fast.trail.append(p)
                 }
             }
-            if abs(Int(m.relativeAlt)) <= 100_000_000 { relativeAltitude = Double(m.relativeAlt) / 1000 } // BUG-003: ±100 km
+            if abs(Int(m.relativeAlt)) <= 100_000_000 { fast.relativeAltitude = Double(m.relativeAlt) / 1000 } // BUG-003: ±100 km
 
         case MAV.GpsRawInt.mavInfo.id:
             guard let m = packet.decode(MAV.GpsRawInt.self) else { break }
-            gpsFixType = m.fixType
-            satellites = m.satellitesVisible == 255 ? 0 : m.satellitesVisible
-            hdop = m.eph == UInt16.max ? 99.99 : Double(m.eph) / 100
+            // BUG-037 (round 3): assign only on change, @Published fires even for equal values
+            if gpsFixType != m.fixType { gpsFixType = m.fixType }
+            let sats: UInt8 = m.satellitesVisible == 255 ? 0 : m.satellitesVisible
+            if satellites != sats { satellites = sats }
+            let hd: Double = m.eph == UInt16.max ? 99.99 : Double(m.eph) / 100
+            if hdop != hd { hdop = hd }
 
         case MAV.SysStatus.mavInfo.id:
             guard let m = packet.decode(MAV.SysStatus.self) else { break }
-            batteryVoltage = m.voltageBattery == UInt16.max ? 0 : Double(m.voltageBattery) / 1000
-            batteryCurrent = m.currentBattery < 0 ? 0 : Double(m.currentBattery) / 100
-            batteryRemaining = Int(m.batteryRemaining)
-            sensorsPresent = m.onboardControlSensorsPresent
-            sensorsEnabled = m.onboardControlSensorsEnabled
-            sensorsHealthy = m.onboardControlSensorsHealth
+            // BUG-037 (round 3): assign only on change, @Published fires even for equal values
+            let bv: Double = m.voltageBattery == UInt16.max ? 0 : Double(m.voltageBattery) / 1000
+            if batteryVoltage != bv { batteryVoltage = bv }
+            let bc: Double = m.currentBattery < 0 ? 0 : Double(m.currentBattery) / 100
+            if batteryCurrent != bc { batteryCurrent = bc }
+            let br = Int(m.batteryRemaining)
+            if batteryRemaining != br { batteryRemaining = br }
+            if sensorsPresent != m.onboardControlSensorsPresent { sensorsPresent = m.onboardControlSensorsPresent }
+            if sensorsEnabled != m.onboardControlSensorsEnabled { sensorsEnabled = m.onboardControlSensorsEnabled }
+            if sensorsHealthy != m.onboardControlSensorsHealth { sensorsHealthy = m.onboardControlSensorsHealth }
 
         case MAV.ScaledPressure2.mavInfo.id:
             guard let m = packet.decode(MAV.ScaledPressure2.self) else { break }
-            waterTemperature = Double(m.temperature) / 100
+            let wt = Double(m.temperature) / 100
+            if waterTemperature != wt { waterTemperature = wt } // BUG-037 (round 3)
 
         case MAV.NavControllerOutput.mavInfo.id:
             guard let m = packet.decode(MAV.NavControllerOutput.self) else { break }
-            waypointDistance = Double(m.wpDist)
+            let wd = Double(m.wpDist)
+            if waypointDistance != wd { waypointDistance = wd } // BUG-037 (round 3)
 
         case MAV.MissionCurrent.mavInfo.id:
             guard let m = packet.decode(MAV.MissionCurrent.self) else { break }
-            currentWaypoint = Int(m.seq)
+            if currentWaypoint != Int(m.seq) { currentWaypoint = Int(m.seq) } // BUG-037 (round 3)
 
         case MAV.EkfStatusReport.mavInfo.id:
             guard let m = packet.decode(MAV.EkfStatusReport.self) else { break }
-            ekfFlags = m.flags
-            ekfVariances = [m.velocityVariance, m.posHorizVariance, m.posVertVariance,
-                            m.compassVariance, m.terrainAltVariance].map { Double($0) }
+            // BUG-037 (round 3): assign only on change
+            if ekfFlags != m.flags { ekfFlags = m.flags }
+            let variances: [Double] = [m.velocityVariance, m.posHorizVariance, m.posVertVariance,
+                                       m.compassVariance, m.terrainAltVariance].map { Double($0) }
+            if ekfVariances != variances { ekfVariances = variances }
 
         case MAV.HomePosition.mavInfo.id:
             guard let m = packet.decode(MAV.HomePosition.self),
                   abs(Int(m.latitude)) <= 900_000_000, abs(Int(m.longitude)) <= 1_800_000_000 else { break } // BUG-004
-            homeLatitude = Double(m.latitude) / 1e7
-            homeLongitude = Double(m.longitude) / 1e7
-            homeAltitudeMSL = Double(m.altitude) / 1000
+            // BUG-037 (round 3): assign only on change
+            let hla = Double(m.latitude) / 1e7
+            let hlo = Double(m.longitude) / 1e7
+            let hal = Double(m.altitude) / 1000
+            if homeLatitude != hla { homeLatitude = hla }
+            if homeLongitude != hlo { homeLongitude = hlo }
+            if homeAltitudeMSL != hal { homeAltitudeMSL = hal }
 
         case MAV.RcChannels.mavInfo.id:
             guard let m = packet.decode(MAV.RcChannels.self) else { break }
-            rcChannels = [m.chan1Raw, m.chan2Raw, m.chan3Raw, m.chan4Raw, m.chan5Raw, m.chan6Raw, m.chan7Raw, m.chan8Raw,
+            // BUG-037 (round 3): into FastTelemetry, only when changed
+            let rc: [UInt16] = [m.chan1Raw, m.chan2Raw, m.chan3Raw, m.chan4Raw, m.chan5Raw, m.chan6Raw, m.chan7Raw, m.chan8Raw,
                           m.chan9Raw, m.chan10Raw, m.chan11Raw, m.chan12Raw, m.chan13Raw, m.chan14Raw, m.chan15Raw,
-                          m.chan16Raw, m.chan17Raw, m.chan18Raw]
-            rcChannelCount = Int(m.chancount)
+                                m.chan16Raw, m.chan17Raw, m.chan18Raw]
+            if rc != fast.rcChannels { fast.rcChannels = rc }
+            if fast.rcChannelCount != Int(m.chancount) { fast.rcChannelCount = Int(m.chancount) }
 
         case MAV.ServoOutputRaw.mavInfo.id:
             guard let m = packet.decode(MAV.ServoOutputRaw.self), m.port == 0 else { break }
-            servoOutputs = [m.servo1Raw, m.servo2Raw, m.servo3Raw, m.servo4Raw, m.servo5Raw, m.servo6Raw, m.servo7Raw,
+            let servos: [UInt16] = [m.servo1Raw, m.servo2Raw, m.servo3Raw, m.servo4Raw, m.servo5Raw, m.servo6Raw, m.servo7Raw,
                             m.servo8Raw, m.servo9Raw, m.servo10Raw, m.servo11Raw, m.servo12Raw, m.servo13Raw,
                             m.servo14Raw, m.servo15Raw, m.servo16Raw]
+            if servos != fast.servoOutputs { fast.servoOutputs = servos } // BUG-037 (round 3)
 
         case MAV.EscTelemetry1To4.mavInfo.id:
             guard let m = packet.decode(MAV.EscTelemetry1To4.self) else { break }
@@ -468,8 +510,11 @@ final class VehicleModel: ObservableObject {
 
         case MAV.Vibration.mavInfo.id:
             guard let m = packet.decode(MAV.Vibration.self) else { break }
-            vibration = [Double(m.vibrationX), Double(m.vibrationY), Double(m.vibrationZ)]
-            clipping = [m.clipping0, m.clipping1, m.clipping2]
+            // BUG-037 (round 3): into FastTelemetry, only when changed
+            let vib: [Double] = [Double(m.vibrationX), Double(m.vibrationY), Double(m.vibrationZ)]
+            if vib != fast.vibration { fast.vibration = vib }
+            let clip: [UInt32] = [m.clipping0, m.clipping1, m.clipping2]
+            if clip != fast.clipping { fast.clipping = clip }
 
         default:
             break
@@ -480,8 +525,9 @@ final class VehicleModel: ObservableObject {
     /// RADIO_STATUS comes from the radio (its own sysid/compid), so it's handled for any source.
     func handleRadio(_ packet: MAVLinkPacket) {
         guard let m = packet.decode(MAV.RadioStatus.self) else { return }
-        radioRSSI = Int(m.rssi)
-        radioRemoteRSSI = Int(m.remrssi)
+        // BUG-037 (round 3): assign only on change
+        if radioRSSI != Int(m.rssi) { radioRSSI = Int(m.rssi) }
+        if radioRemoteRSSI != Int(m.remrssi) { radioRemoteRSSI = Int(m.remrssi) }
     }
 
     /// BUG-008: one banner for the most important current problem: a recent failsafe/fence/EKF/battery STATUSTEXT
@@ -518,13 +564,28 @@ final class VehicleModel: ObservableObject {
             let cleared = lower.contains("clear")
             if leakDetected == cleared { leakDetected = !cleared }
         }
-        messages.insert(StatusMessage(date: Date(), severity: sev, text: text), at: 0)
+        // BUG-037 (round 3): buffered; flushMessages publishes them at most every messagesPublishInterval
+        pendingMessages.insert(StatusMessage(date: Date(), severity: sev, text: text), at: 0)
+        if pendingMessages.count > Self.maxMessages { pendingMessages.removeLast(pendingMessages.count - Self.maxMessages) }
         // BUG-008: safety-relevant warnings become the HUD banner, not just a line in the Messages tab.
         if sev.rawValue <= MAVSeverity.warning.rawValue {
             let lower = text.lowercased()
             if Self.alertWords.contains(where: { lower.contains($0) }) { lastAlert = (text, Date()); updateWarning(now: Date()) }
         }
-        if messages.count > Self.maxMessages { messages.removeLast(messages.count - Self.maxMessages) }
+        flushMessages(force: false)
+    }
+
+    /// BUG-037 (round 3): move buffered STATUSTEXT into `messages` (one publish). Called per message (rate-limited)
+    /// and from tick() (forced), so a burst's tail appears within about a second.
+    func flushMessages(force: Bool) {
+        guard !pendingMessages.isEmpty else { return }
+        let now = Date()
+        guard force || now.timeIntervalSince(lastMessagesPublish) >= Self.messagesPublishInterval else { return }
+        lastMessagesPublish = now
+        var list = pendingMessages + messages
+        pendingMessages = []
+        if list.count > Self.maxMessages { list.removeLast(list.count - Self.maxMessages) }
+        messages = list
     }
 
     static func wrap360(_ deg: Double) -> Double {

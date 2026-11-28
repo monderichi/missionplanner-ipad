@@ -67,7 +67,7 @@ struct PlanView: View {
             }
             HStack(spacing: 0) {
                 ZStack(alignment: .topTrailing) {
-                    MapCanvas(vehicle: vehicle, mission: mission, tileSource: source,
+                    MapCanvas(vehicle: vehicle, fast: vehicle.fast, mission: mission, tileSource: source,
                               editTarget: addMode ? target.mapTarget : .none,
                               previewCenter: target == .circle ? circleCenter : nil,
                               previewRadius: target == .circle ? circleRadius : 0,
