@@ -147,6 +147,7 @@ public final class LogDownloadSession {
         }
         if size == 0 {
             active = false
+            closeFile() // review R2-1: nothing to download; don't keep the handle open
             return [end()]
         }
         return [request(ofs: 0, count: size)]

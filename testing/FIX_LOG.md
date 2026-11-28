@@ -111,3 +111,17 @@ Code comments at each change are tagged `// BUG-0xx:`.
 | REVIEW_5 opt. 2 | The one-item fence/rally tests also require the read-back failure ("differs"), so a hang can't pass them. | `testSingleFenceCircleAndRadiusChangeAreVerified`, `testSingleRallyPointMoveIsVerified` |
 
 Verified: unit 66/66, fake drone 86/86, SITL `sitl_log_download`, `sitl_arm`, `sitl_mission_roundtrip`.
+
+Review R2-1 (`testing/REVIEW_R2_1.md`): **APPROVED**; its optional items were applied too:
+- A zero-size log finishes at once ("is empty: nothing to save"; handle closed, partial deleted): `testFileBackedZeroSizeLogEndsAtOnce`.
+- An existing `.bin` is replaced in one step (`replaceItemAt`).
+- Leftover `*.partial` files from a killed run are swept on attach.
+- A start error deletes the partial file.
+- Background (quiet) requests don't get a red "link changed" banner.
+
+BUG-037 (still PARTIAL): UI batches now publish at 10 Hz (was 20 Hz), and `messageCounts` (changes on every packet) is
+no longer `@Published`. **Not re-measured**: the Catalyst perf run failed before starting ("Timed out while enabling
+automation mode": macOS needs the user to approve UI automation). Re-measure with
+`testing/sim/catalyst.sh perf BreakTestUITests2/test_perf_highRateAndFlood` (accept < 15 % CPU).
+
+Verified after these: unit 67/67, fake drone 86/86, SITL `sitl_log_download` + `sitl_arm` 2/2.

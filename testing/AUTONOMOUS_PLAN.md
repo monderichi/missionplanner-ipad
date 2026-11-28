@@ -128,3 +128,5 @@ The user's original request is kept verbatim at the end; the version below is th
   testing/.build, testing/artifacts, test crash reports removed; Xcode, testing/.sitl, testing/.venv kept.
 - 09:08 User: "Continue with a review and fix cycle until 10:00 closing as many bugs as possible." Round 2 on branch
   `bug_fixes_2`: BUG-019 fixed (DataFlash streamed to file), REVIEW_5 optional 2/3. Unit 66/66, fake drone 86/86, SITL 3/3.
+- 09:43 Review R2-1 APPROVED; optional items applied. BUG-037: 10 Hz UI batches + unpublished counters (Catalyst perf run
+  blocked by macOS automation-mode approval, not re-measured). Unit 67/67, fake drone 86/86, SITL 2/2. Next: quick review, merge.

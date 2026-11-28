@@ -35,6 +35,10 @@ final class LogStore: ObservableObject {
     func attach(systemID: UInt8, componentID: UInt8) {
         system = systemID
         component = componentID
+        // review R2-1: an unfinished download from a run that iOS killed leaves "<name>.partial": sweep those.
+        if download == nil, let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) {
+            for n in names where n.hasSuffix(".partial") { try? FileManager.default.removeItem(at: directory.appendingPathComponent(n)) }
+        }
     }
 
     func detach() {
@@ -77,6 +81,13 @@ final class LogStore: ObservableObject {
         s.start(now: now).forEach { send?($0) }
         if let why = s.startError {
             message = "Download failed: \(why)"
+            discardPartial() // review R2-1: the file may exist even if it couldn't be opened
+            download = nil
+            downloading = nil
+        } else if !s.active {
+            // review R2-1: a zero-size log finishes at once (the session sends LOG_REQUEST_END and no event)
+            message = "Log \(entry.id) is empty: nothing to save"
+            discardPartial()
             download = nil
             downloading = nil
         }
@@ -159,8 +170,12 @@ final class LogStore: ObservableObject {
             guard let entry = downloading else { return }
             let url = directory.appendingPathComponent(fileName(entry))
             do {
-                if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
-                try FileManager.default.moveItem(at: partial, to: url)
+                // review R2-1: replace an existing .bin in one step, so a failed save never loses the old copy
+                if FileManager.default.fileExists(atPath: url.path) {
+                    _ = try FileManager.default.replaceItemAt(url, withItemAt: partial)
+                } else {
+                    try FileManager.default.moveItem(at: partial, to: url)
+                }
                 message = "Saved \(url.lastPathComponent) (\(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)))"
             } catch {
                 message = "Save failed: \(error.localizedDescription)"

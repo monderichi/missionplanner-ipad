@@ -77,7 +77,9 @@ final class VehicleModel: ObservableObject {
     @Published private(set) var leakDetected = false
 
     @Published private(set) var messages: [StatusMessage] = []
-    @Published private(set) var messageCounts: [String: Int] = [:]
+    /// BUG-037 (round 2): not @Published: it changes on every packet. Views that show it re-read it whenever the batch
+    /// publishes anything else (attitude, heartbeat), at most 10 times a second.
+    private(set) var messageCounts: [String: Int] = [:]
 
     // HOME_POSITION
     @Published private(set) var homeLatitude: Double?

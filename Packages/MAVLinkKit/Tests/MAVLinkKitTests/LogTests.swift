@@ -169,4 +169,14 @@ final class LogTests: XCTestCase {
         XCTAssertNotNil(s.startError)
         XCTAssertFalse(s.active)
     }
+
+    /// review R2-1: a zero-size log in file mode ends at once (LOG_REQUEST_END, not active, no error).
+    func testFileBackedZeroSizeLogEndsAtOnce() {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("logtest-\(UUID().uuidString).partial")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let s = LogDownloadSession(entry: LogEntryInfo(id: 2, size: 0, timeUtc: 0), targetSystem: 1, fileURL: url)
+        XCTAssertTrue(s.start(now: 0).first is MAV.LogRequestEnd)
+        XCTAssertFalse(s.active)
+        XCTAssertNil(s.startError)
+    }
 }

@@ -25,8 +25,9 @@ final class CommandCenter: ObservableObject {
     /// BUG-027: a session replaced/removed while commands were in flight: say so instead of "Arming…" forever.
     private func abandonPending() {
         defer { labelQueue = [:]; sentAt = [:]; quiet = [:] }
-        if let s = session, !s.pendingCommands.isEmpty {
-            lastResult = "\(name(s.pendingCommands[0])): link changed, not confirmed"
+        // review R2-1: background (quiet) requests such as HOME_POSITION don't get a red banner
+        if let s = session, let cmd = s.pendingCommands.first(where: { quiet[$0] == nil }) {
+            lastResult = "\(name(cmd)): link changed, not confirmed"
             lastResultOK = false
         }
     }
