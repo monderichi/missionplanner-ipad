@@ -214,6 +214,7 @@ def start_sitl(name, port=14550, slot=0, vehicle="copter"):
 
 def run(key, hb, slot=0):
     spec = S[key]
+    fk = key.replace(":", "_")  # log file names: actions/upload-artifact rejects ':' (probe:NAME keys)
     os.makedirs(LOGS, exist_ok=True)
     home = os.path.join(ROOT, "testing", ".build", "home" if slot == 0 else f"home{slot}")
     os.makedirs(os.path.join(home, "Documents"), exist_ok=True)
@@ -225,24 +226,24 @@ def run(key, hb, slot=0):
             if err:
                 return "SKIP", err
         if spec.get("proxy"):
-            proxy = start(PROXY + remap(spec["proxy"] + ["--app", "127.0.0.1:14550"], slot), f"{key}.proxy.log")
+            proxy = start(PROXY + remap(spec["proxy"] + ["--app", "127.0.0.1:14550"], slot), f"{fk}.proxy.log")
         dargs = spec.get("drone")
         if dargs is not None:
             dargs = remap(dargs + ["--control-port", "17001", "--udp-src-port", "14590"], slot)
         if dargs is not None:
-            drone = start(DRONE + dargs, f"{key}.drone.log")
+            drone = start(DRONE + dargs, f"{fk}.drone.log")
             time.sleep(0.6)
         hargs = remap(spec.get("harness", H_TCP if dargs is not None else []) + ["--ctrl", "17001", "--local-port", "14550"], slot)
         if spec.get("name") == "connect" and key == "connect_udp_connect":
             hargs = remap(spec["harness"] + ["--ctrl", "17001"], slot)
         cmd = [hb, spec.get("name", key)] + hargs + ["-speech.enabled", "<false/>"]
-        hlog = open(os.path.join(LOGS, f"{key}.harness.log"), "w")
+        hlog = open(os.path.join(LOGS, f"{fk}.harness.log"), "w")
         h = subprocess.Popen(cmd, stdout=hlog, stderr=subprocess.STDOUT, cwd=ROOT, env=env)
         for hook, t in spec.get("hooks", []):
             if hook == "restart_drone_after_quit":
                 drone.wait(timeout=30)
                 time.sleep(t)
-                drone = start(DRONE + dargs, f"{key}.drone2.log")
+                drone = start(DRONE + dargs, f"{fk}.drone2.log")
         try:
             rc = h.wait(timeout=900)
         except subprocess.TimeoutExpired:
@@ -253,7 +254,7 @@ def run(key, hb, slot=0):
         stop(drone)
         stop(proxy)
         stop(sitl)
-    text = open(os.path.join(LOGS, f"{key}.harness.log")).read()
+    text = open(os.path.join(LOGS, f"{fk}.harness.log")).read()
     fails = [l[11:] for l in text.splitlines() if l.startswith("CHECK FAIL")]
     fatal = re.findall(r"(Fatal error.*|.*error: .*Index out of range.*)", text)
     if rc == "timeout":

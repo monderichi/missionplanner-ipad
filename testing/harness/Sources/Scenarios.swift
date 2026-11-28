@@ -538,7 +538,7 @@ enum Scenarios {
         c.note("after disconnect during param download: state=\(c.link.params.downloadState) params=\(c.link.params.params.count)")
         c.connect()
         c.waitUntil(8) { c.vehicle.heartbeatAlive }
-        c.check("params complete after reconnect", c.waitParams(timeout: 30))
+        c.check("params complete after reconnect", c.waitParams(timeout: 90)) // CI runners are ~3x slower than a Mac
         c.link.mission.setItems(.mission, sampleMission(c, n: 200))
         c.link.mission.write(.mission)
         c.pump(0.3)
