@@ -24,7 +24,7 @@ struct RoverSetupPage: View {
         (1...16).compactMap { n in
             guard let f = params.params["SERVO\(n)_FUNCTION"]?.value else { return nil }
             guard f.isFinite else { return nil } // BUG-005: a non-finite parameter value must not trap
-            let fn = Int(f.rounded())
+            let fn = Int(max(-1_000_000, min(1_000_000, f.rounded()))) // review 2: Int(1e20) would trap
             return RoverSetupPage.functionNames[fn] != nil ? DriveOutput(index: n, function: fn) : nil
         }
     }

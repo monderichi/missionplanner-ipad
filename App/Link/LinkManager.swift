@@ -375,7 +375,8 @@ final class LinkManager: ObservableObject {
         uiFlushScheduled = true
         let gen = ioGeneration
         ioQueue.asyncAfter(deadline: .now() + Self.uiBatchInterval) { [weak self] in
-            guard let self else { return }
+            // review 2: an old link's flush must not take (and drop) a new link's batch or clear its flag
+            guard let self, gen == self.ioGeneration else { return }
             let batch = self.uiBatch
             self.uiBatch = []
             self.uiFlushScheduled = false

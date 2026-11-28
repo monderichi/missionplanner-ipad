@@ -58,6 +58,11 @@ public final class CommandSession {
     /// The in-flight message for a command id (to know what an event refers to).
     public func inFlight(_ command: UInt16) -> MAV.CommandLong? { pending[command]?.message }
 
+    /// Seconds until ACKs / vehicle state may confirm the in-flight command with this id (0 = now).
+    public func ambiguityRemaining(_ command: UInt16, now: TimeInterval) -> TimeInterval {
+        max(0, (pending[command]?.ambiguousUntil ?? -.infinity) - now)
+    }
+
     /// Number of commands with this id waiting behind the in-flight one.
     public func queuedCount(_ command: UInt16) -> Int { queued[command]?.count ?? 0 }
 
@@ -81,8 +86,10 @@ public final class CommandSession {
     }
 
     /// BUG-002: the vehicle's own state (HEARTBEAT armed flag / custom mode) shows the in-flight command took effect.
-    public func confirmByState(_ command: UInt16) -> [Event] {
-        guard pending[command] != nil else { return [] }
+    public func confirmByState(_ command: UInt16, now: TimeInterval) -> [Event] {
+        // review 2: not inside the ambiguity window either: a heartbeat from before the superseded command took effect
+        // could otherwise "confirm" a lost DISARM.
+        guard let p = pending[command], now >= p.ambiguousUntil else { return [] }
         pending[command] = nil
         releaseQueued(command)
         return [.accepted(command: command)]
@@ -142,6 +149,9 @@ public final class CommandSession {
                 events.append(.timedOut(command: cmd))
                 releaseQueued(cmd)
             } else {
+                // review 2: a released queued command's first send: a duplicate ACK of the previous one (same id) may
+                // still arrive, so its ACKs only count after a short window.
+                if p.attempts == 0 { p.ambiguousUntil = now + min(0.5, config.timeout / 3) }
                 p.attempts += 1
                 p.lastSent = now
                 p.message.confirmation = UInt8(min(255, max(0, p.attempts - 1))) // MAVLink: increment on resend

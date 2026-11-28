@@ -13,7 +13,8 @@ fix is listed in `testing/FIX_LOG.md` with its cause, change and proof. Code cha
   commands queue in order, so none is dropped (BUG-002). A lost ACK is checked against the heartbeat before an
   error is shown (BUG-017).
 - **Mission upload works on lossy links to real ArduPilot.** INVALID_SEQUENCE is no longer fatal, and a lost final
-  ACK is verified by reading back the count and the last item (a vehicle that timed out keeps its old last item).
+  ACK is verified by reading back the count and the last item (all vertices for fences, which ArduPilot keeps whole on
+  a timeout).
   Lossy SITL uploads went from 4/5 failing to 3/3 passing (BUG-033).
 - **No more crashes** from NaN/Inf/out-of-range telemetry, corrupt files, FLTMODE_CH = 0, a huge takeoff altitude,
   a latitude typo, missions over 65 535 items, or a malformed ACCELCAL message (BUG-003…-007, -009, -010).
@@ -29,13 +30,14 @@ fix is listed in `testing/FIX_LOG.md` with its cause, change and proof. Code cha
 ### How it was tested
 | Check | Result |
 |---|---|
-| MAVLinkKit unit tests (incl. new regression tests and an ArduPilot-like lossy mission vehicle) | 59/59 |
+| MAVLinkKit unit tests (incl. new regression tests and an ArduPilot-like lossy mission vehicle) | 60/60 |
 | Headless app harness vs fake drone: scenarios, crash probes, fuzzers (`python3 testing/scenarios/run.py -j 4 all`) | 86/86, 0 crashes (before: 16 crashes, 24 fails) |
 | ArduCopter/Rover/Sub 4.7.3 SITL (`run.py -j 4 sitl`) | 21/21 |
 | Thread Sanitizer on the link scenarios | 0 races (before: 4) |
 | Mac Catalyst UI tests (`testing/sim/catalyst.sh uitest`) | the former crash tests and BUG-001/-008/-013 pass; remaining failures are XCUITest limits (ADS-B labels, list scrolling) |
 
-Independent review: `testing/REVIEW_1.md` (7 required changes, all applied, see `testing/FIX_LOG.md`).
+Independent reviews: `testing/REVIEW_1.md` (7 required changes) and `testing/REVIEW_2.md` (2 required changes), all
+applied, see `testing/FIX_LOG.md`.
 New CI job `break-test` runs the harness scenarios and probes on every push and PR.
 
 ### Known remaining (documented)

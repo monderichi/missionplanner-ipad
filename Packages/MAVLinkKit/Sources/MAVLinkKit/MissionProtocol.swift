@@ -190,8 +190,9 @@ public final class MissionSession {
         case upload(MissionType, items: [MissionItem], lastRequested: Int?)
         /// BUG-033: the final ACK may have been lost; read MISSION_COUNT back to confirm the upload…
         case uploadVerify(MissionType, items: [MissionItem])
-        /// …then the last item (review 1: a vehicle that timed out keeps the OLD last item, and the count still matches).
-        case uploadVerifyLast(MissionType, items: [MissionItem])
+        /// …then items from `next` on (review 1: missions/rally are written item by item, so a vehicle that timed out keeps
+        /// the OLD last item → check the last one; review 2: ArduPilot keeps the whole OLD fence on timeout → check all).
+        case uploadVerifyLast(MissionType, items: [MissionItem], next: Int)
     }
 
     public let targetSystem: UInt8
@@ -349,21 +350,29 @@ public final class MissionSession {
                 op = .idle
                 return ([ack(type)], [.failed(type: type, reason: "Not confirmed: vehicle has \(c.count) items, expected \(items.count). Upload again.")])
             }
-            op = .uploadVerifyLast(type, items: items)
+            let first = type == .fence ? 0 : items.count - 1
+            op = .uploadVerifyLast(type, items: items, next: first)
             lastActivity = now
             attempts = 0
-            return ([requestItem(type, items.count - 1)], [])
+            return ([requestItem(type, first)], [])
 
-        case .uploadVerifyLast(let type, let items):
+        case .uploadVerifyLast(let type, let items, let next):
             var got: MissionItem?
             if let m = packet.decode(MAV.MissionItemInt.self) { got = MissionItem(m) }
             else if let m = packet.decode(MAV.MissionItem.self) { got = MissionItem(m) }
-            guard let it = got, it.missionType == type.rawValue, Int(it.seq) == items.count - 1 else { return ([], []) }
-            op = .idle
-            if Self.sameItem(it, items[items.count - 1]) {
-                return ([ack(type)], [.uploaded(type: type, count: items.count)])
+            guard let it = got, it.missionType == type.rawValue, Int(it.seq) == next else { return ([], []) }
+            guard Self.sameItem(it, items[next], type: type) else {
+                op = .idle
+                return ([ack(type)], [.failed(type: type, reason: "Not confirmed: the vehicle's item \(next) differs from the plan. Upload again.")])
             }
-            return ([ack(type)], [.failed(type: type, reason: "Not confirmed: the vehicle's last item differs from the plan. Upload again.")])
+            if next + 1 < items.count {
+                op = .uploadVerifyLast(type, items: items, next: next + 1)
+                lastActivity = now
+                attempts = 0
+                return ([requestItem(type, next + 1)], [])
+            }
+            op = .idle
+            return ([ack(type)], [.uploaded(type: type, count: items.count)])
         }
     }
 
@@ -381,10 +390,14 @@ public final class MissionSession {
                 [.progress(type: type, done: seq + 1, total: items.count)])
     }
 
-    /// Same item as sent, as far as ArduPilot stores it: command, position (1e-7°) and altitude (it keeps cm, so ±5 cm).
-    /// Params are not compared: ArduPilot keeps only the ones a command uses. A stale old item differs in these.
-    static func sameItem(_ a: MissionItem, _ b: MissionItem) -> Bool {
-        a.command == b.command && abs(Int(a.x) - Int(b.x)) <= 1 && abs(Int(a.y) - Int(b.y)) <= 1 && abs(a.z - b.z) <= 0.05
+    /// Same item as sent, as far as ArduPilot stores it. Location items: command, position (1e-7°) and altitude
+    /// (missions keep cm → ±5 cm; rally points keep whole metres → ±1 m). Non-location items (RTL, DO_*, …): command
+    /// only, since ArduPilot keeps just the params a command uses. A stale old item differs in these.
+    static func sameItem(_ a: MissionItem, _ b: MissionItem, type: MissionType = .mission) -> Bool {
+        guard a.command == b.command else { return false }
+        guard MissionCmd.hasLocation(b.command) || type != .mission else { return true }
+        let altTolerance: Float = type == .rally ? 1.0 : 0.05
+        return abs(Int(a.x) - Int(b.x)) <= 1 && abs(Int(a.y) - Int(b.y)) <= 1 && (type == .fence || abs(a.z - b.z) <= altTolerance)
     }
 
     /// BUG-033: confirm an upload whose final ACK may be lost by asking for the vehicle's item count.
@@ -426,9 +439,9 @@ public final class MissionSession {
         case .uploadVerify(let t, _):
             type = t
             resend = MAV.MissionRequestList(targetSystem: targetSystem, targetComponent: targetComponent, missionType: t.rawValue)
-        case .uploadVerifyLast(let t, let items):
+        case .uploadVerifyLast(let t, _, let next):
             type = t
-            resend = requestItem(t, items.count - 1)
+            resend = requestItem(t, next)
         }
         if attempts > config.retries {
             op = .idle

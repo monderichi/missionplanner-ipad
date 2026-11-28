@@ -171,7 +171,7 @@ struct ServoView: View {
         // BUG-014: unknown (parameters not downloaded yet) counts as a motor: block until we know.
         guard let f = params.params["SERVO\(ch)_FUNCTION"]?.value else { return true }
         guard f.isFinite else { return true }
-        let fn = Int(f.rounded())
+        let fn = Int(max(-1_000_000, min(1_000_000, f.rounded()))) // review 2: Int(1e20) would trap
         return (33...40).contains(fn) || (82...85).contains(fn)
     }
 }

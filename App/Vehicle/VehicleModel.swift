@@ -305,13 +305,14 @@ final class VehicleModel: ObservableObject {
                 componentID = packet.componentID
             }
             guard packet.systemID == systemID, packet.componentID == componentID else { return false }
+            // review 2: mark the link alive first, so an arm/disarm that happened during a dropout is still announced
+            lastHeartbeat = Date()
+            if !heartbeatAlive { heartbeatAlive = true }
             vehicleType = hb.type
             autopilot = hb.autopilot
             armed = (hb.baseMode & MAVModeFlag.safetyArmed) != 0
             customMode = hb.customMode
             systemStatus = hb.systemStatus
-            lastHeartbeat = Date()
-            if !heartbeatAlive { heartbeatAlive = true }
             return newVehicle
         }
 

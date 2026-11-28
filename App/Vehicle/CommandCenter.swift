@@ -47,7 +47,7 @@ final class CommandCenter: ObservableObject {
     func arm(_ arm: Bool, force: Bool = false) {
         guard let session else { return }
         session.arm(arm, force: force, now: now).forEach { send?($0) }
-        sentAt[MAVCmd.componentArmDisarm] = Date()
+        markSent(MAVCmd.componentArmDisarm)
         requestedArm = arm
         lastResult = arm ? "Arming…" : (force ? "Force disarming…" : "Disarming…")
         refreshPending()
@@ -56,7 +56,7 @@ final class CommandCenter: ObservableObject {
     func setMode(_ mode: UInt32, name: String) {
         guard let session else { return }
         session.setMode(mode, now: now).forEach { send?($0) }
-        sentAt[MAVCmd.doSetMode] = Date()
+        markSent(MAVCmd.doSetMode)
         requestedMode = mode
         lastResult = "Changing mode to \(name)…"
         refreshPending()
@@ -83,13 +83,20 @@ final class CommandCenter: ObservableObject {
             names[command] = label
             lastResult = "\(label)…"
         }
-        sentAt[command] = Date()
+        markSent(command)
         refreshPending()
+    }
+
+    /// Earliest heartbeat time that may confirm the in-flight command: 0.3 s after sending, or the end of its
+    /// ambiguity window (review 2) when it superseded another command.
+    private func markSent(_ cmd: UInt16) {
+        guard let session else { return }
+        sentAt[cmd] = Date().addingTimeInterval(max(0.3, session.ambiguityRemaining(cmd, now: now)))
     }
 
     /// Labels of commands queued behind an in-flight one with the same id (FIFO, mirrors CommandSession's queue).
     private var labelQueue: [UInt16: [String]] = [:]
-    /// When the in-flight arm/disarm or mode command was (last) sent: only a HEARTBEAT after this confirms it.
+    /// Per command id: only a HEARTBEAT received at/after this time may confirm the in-flight command (see markSent).
     private var sentAt: [UInt16: Date] = [:]
 
     /// BUG-002: confirm arm/disarm and mode changes from the vehicle's HEARTBEAT (COMMAND_ACKs are ambiguous after a
@@ -97,9 +104,11 @@ final class CommandCenter: ObservableObject {
     private func confirmFromVehicleState() {
         guard let session, let v = vehicle, v.heartbeatAlive, let hb = v.lastHeartbeat else { return }
         for cmd in [MAVCmd.componentArmDisarm, MAVCmd.doSetMode] {
-            guard let m = session.inFlight(cmd), let t = sentAt[cmd], hb.timeIntervalSince(t) >= 0.3 else { continue }
+            // review 2: the heartbeat must postdate the send by the ambiguity window (≥ 0.3 s), so it reflects what the
+            // vehicle did after *this* command, not the state before a superseded one took effect.
+            guard let m = session.inFlight(cmd), let after = sentAt[cmd], hb >= after else { continue }
             let reached = cmd == MAVCmd.componentArmDisarm ? v.armed == (m.param1 == 1) : v.customMode == UInt32(exactly: m.param2)
-            if reached { session.confirmByState(cmd).forEach { apply($0) } }
+            if reached { session.confirmByState(cmd, now: now).forEach { apply($0) } }
         }
     }
 

@@ -111,3 +111,5 @@ The user's original request is kept verbatim at the end; the version below is th
   fake drone 86/86 (after updating the no_ack check: the outcome now comes from the heartbeat), SITL 21/21, UI suite 1 9/9.
   Step 10 next: fresh reviewer → testing/REVIEW_2.md.
 - 04:31 CI: IPA build green; new break-test job failed (CI Swift couldn't type-check the probe dictionary literal). Rewritten entry by entry; probes 20/20 locally; pushed. Review 2 running.
+- 04:58 Step 10 (review 2): CHANGES REQUIRED (2; all 7 of review 1 confirmed fixed). Back to step 9: both + optional items applied.
+  Verified: unit 60/60, fake drone 86/86, SITL 21/21, UI suite 1 9/9. Next: step 10 again (review 3).

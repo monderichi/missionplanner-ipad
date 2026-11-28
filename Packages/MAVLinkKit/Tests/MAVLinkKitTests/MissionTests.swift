@@ -50,7 +50,8 @@ final class SimulatedMissionVehicle {
                 } else if let c = p.decode(MAV.MissionCount.self) {
                     uploading = (c.missionType, Int(c.count), [:])
                     lastItemTime = now
-                    if writeThrough { // ArduPilot truncates to the new count; old items stay until overwritten
+                    if writeThrough && c.missionType != 1 { // missions/rally: truncate; old items stay until overwritten
+                        // (fences, review 2: ArduPilot buffers the whole fence and keeps the old one until completion)
                         stored[c.missionType] = Array((stored[c.missionType] ?? []).prefix(Int(c.count)))
                     }
                     if c.count == 0 {
@@ -67,7 +68,7 @@ final class SimulatedMissionVehicle {
                 } else if let m = p.decode(MAV.MissionItemInt.self), var u = uploading, m.missionType == u.type {
                     u.items[Int(m.seq)] = MissionItem(m)
                     lastItemTime = now
-                    if writeThrough, Int(m.seq) < (stored[u.type]?.count ?? 0) { stored[u.type]![Int(m.seq)] = MissionItem(m) }
+                    if writeThrough, u.type != 1, Int(m.seq) < (stored[u.type]?.count ?? 0) { stored[u.type]![Int(m.seq)] = MissionItem(m) }
                     uploading = u
                     if let next = (0..<u.count).first(where: { u.items[$0] == nil }) {
                         out.append(request(next, u.type))
@@ -157,6 +158,27 @@ final class MissionTests: XCTestCase {
         let up = run(s, v, start: s.startUpload(.mission, items: edited, now: 0))
         XCTAssertFalse(up.contains(.uploaded(type: .mission, count: edited.count)), "stale last item reported as uploaded: \(up.suffix(2))")
         XCTAssertEqual(v.stored[0]?.last?.command, old.last?.command, "the simulated vehicle should still hold the old last item")
+    }
+
+    /// Review 2: a fence edit that keeps the vertex count and the last vertex: the vehicle times out and keeps the whole
+    /// OLD fence. Only a full read-back notices; the session must not report "uploaded".
+    func testFenceUploadNotConfirmedWhenVehicleKeptOldFence() {
+        let v = SimulatedMissionVehicle(dropRate: 0)
+        v.arduPilotLike = true
+        v.writeThrough = true
+        let corners = [(-35.36, 149.16), (-35.36, 149.17), (-35.37, 149.17), (-35.37, 149.16)]
+        let old = corners.enumerated().map { i, c in
+            MissionItem(seq: UInt16(i), frame: 0, command: MissionCmd.fencePolygonInclusion, param1: 4,
+                        latitude: c.0, longitude: c.1, missionType: .fence)
+        }
+        v.stored[1] = old
+        var edited = old
+        edited[1].latitude = -35.355 // drag a middle vertex
+        v.dropSeq = 3                 // the last vertex never arrives → vehicle times out
+        let s = MissionSession(targetSystem: 1, config: .narrowLink)
+        let up = run(s, v, start: s.startUpload(.fence, items: edited, now: 0))
+        XCTAssertFalse(up.contains(.uploaded(type: .fence, count: 4)), "old fence reported as uploaded: \(up.suffix(2))")
+        XCTAssertEqual(v.stored[1]?[1].x, old[1].x, "the simulated vehicle should still hold the old fence")
     }
 
     /// BUG-033: uploads to an ArduPilot-like vehicle at 30 % loss each way must all end "uploaded" (verified by read-back

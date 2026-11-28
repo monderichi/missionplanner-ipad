@@ -53,7 +53,8 @@ final class BreakTestRegressionTests: XCTestCase {
         XCTAssertTrue(s.handle(ack(MAVCmd.componentArmDisarm), now: 0.2).isEmpty)
         let r = s.tick(now: 2.0)
         XCTAssertEqual((r.messages.first as? MAV.CommandLong)?.param2, 21196, "force-disarm must be retried")
-        XCTAssertEqual(s.confirmByState(MAVCmd.componentArmDisarm), [.accepted(command: MAVCmd.componentArmDisarm)])
+        XCTAssertTrue(s.confirmByState(MAVCmd.componentArmDisarm, now: 0.5).isEmpty, "no state confirmation inside the window")
+        XCTAssertEqual(s.confirmByState(MAVCmd.componentArmDisarm, now: 2.5), [.accepted(command: MAVCmd.componentArmDisarm)])
     }
 
     /// Review 1: servo 5, 6, 7 tapped quickly: every channel is sent (FIFO), none dropped.
@@ -61,9 +62,10 @@ final class BreakTestRegressionTests: XCTestCase {
         let s = CommandSession(targetSystem: 1)
         var sent: [Float] = []
         for ch in [Float(5), 6, 7] { sent += s.send(183, params: [ch, 1900], now: 0).compactMap { ($0 as? MAV.CommandLong)?.param1 } }
-        for _ in 0..<2 {
-            _ = s.handle(ack(183), now: 0.3)
-            sent += s.tick(now: 0.5).messages.compactMap { ($0 as? MAV.CommandLong)?.param1 }
+        for k in 0..<2 {
+            let t = Double(k) * 2
+            _ = s.handle(ack(183), now: 0.3 + t) // ACK of the in-flight one (after any ambiguity window)
+            sent += s.tick(now: 0.5 + t).messages.compactMap { ($0 as? MAV.CommandLong)?.param1 }
         }
         XCTAssertEqual(sent, [5, 6, 7])
     }

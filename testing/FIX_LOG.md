@@ -71,3 +71,11 @@ Code comments at each change are tagged `// BUG-0xx:`.
 | 6 | RC page: layout modifiers restored (a `//` comment had swallowed them); capture min/max use `Text(verbatim:)`. | UI `test_D4_radioBars` |
 | 7 | Disconnect is shown whenever a link exists (also while failed/retrying) or a replay runs. | code |
 | opt. | CI comment moved to the simulator job and `-j 2`; UI batch flag reset on disconnect; fly-here 5 s no-answer message and its ACK window cleared by other mission operations; a failed replay fully disconnects. Also: the accel-cal start is resent (≤ 3×) when no position request arrives within 5 s. | `accel_cal_lossy*.sh` |
+
+## Review 2 (testing/REVIEW_2.md): required changes applied
+
+| # | Change | Proof |
+|---|---|---|
+| 1 | Heartbeat confirmation of a superseding arm/disarm or mode command only counts after its ambiguity window (`CommandSession.confirmByState(_:now:)`, `CommandCenter.markSent`): a heartbeat from before the superseded command took effect can't confirm a lost DISARM. | `test_BUG002_forceDisarmNotAcceptedByArmAck` (no confirmation inside the window), `sitl_arm.sh` |
+| 2 | Fence uploads are verified by reading back **every** vertex (ArduPilot keeps the whole old fence on timeout); missions/rally keep the last-item check. | `testFenceUploadNotConfirmedWhenVehicleKeptOldFence`, `sitl_fence_rally.sh` |
+| opt. | Released queued commands ignore ACKs for a short window (a duplicate ACK of the previous one can't accept them); heartbeat marks the link alive before `armed`, so arm/disarm during a dropout is still announced; an old link's 50 ms flush no longer takes the new link's batch; read-back compares only the command for non-location items, rally altitude ±1 m; `Int()` of huge SERVOn_FUNCTION values clamped. | unit 60/60, fake drone 86/86, SITL 21/21, UI suite 1 9/9 |
