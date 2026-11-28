@@ -342,7 +342,9 @@ public final class MissionSession {
                 return ([], []) // other answers to the list request: wait for MISSION_COUNT or time out
             }
             guard let c = packet.decode(MAV.MissionCount.self), c.missionType == type.rawValue else { return ([], []) }
-            if Int(c.count) == items.count && items.count <= 1 { // home only: ArduPilot rewrites home itself
+            // review 3: home-only *missions* only (ArduPilot rewrites home itself); a single fence circle or rally point
+            // must still be read back.
+            if type == .mission && Int(c.count) == items.count && items.count <= 1 {
                 op = .idle
                 return ([ack(type)], [.uploaded(type: type, count: items.count)])
             }
@@ -397,7 +399,14 @@ public final class MissionSession {
         guard a.command == b.command else { return false }
         guard MissionCmd.hasLocation(b.command) || type != .mission else { return true }
         let altTolerance: Float = type == .rally ? 1.0 : 0.05
-        return abs(Int(a.x) - Int(b.x)) <= 1 && abs(Int(a.y) - Int(b.y)) <= 1 && (type == .fence || abs(a.z - b.z) <= altTolerance)
+        guard abs(Int(a.x) - Int(b.x)) <= 1 && abs(Int(a.y) - Int(b.y)) <= 1 else { return false }
+        if type == .fence {
+            // review 3: param1 is the polygon vertex count (exact) or the circle radius (ArduPilot keeps it as a float;
+            // allow ±1 m for rounding)
+            let circle = b.command == MissionCmd.fenceCircleInclusion || b.command == MissionCmd.fenceCircleExclusion
+            return circle ? abs(a.param1 - b.param1) <= 1 : a.param1 == b.param1
+        }
+        return abs(a.z - b.z) <= altTolerance
     }
 
     /// BUG-033: confirm an upload whose final ACK may be lost by asking for the vehicle's item count.

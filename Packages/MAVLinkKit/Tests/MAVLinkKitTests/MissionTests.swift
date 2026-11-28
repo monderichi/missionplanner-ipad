@@ -181,6 +181,26 @@ final class MissionTests: XCTestCase {
         XCTAssertEqual(v.stored[1]?[1].x, old[1].x, "the simulated vehicle should still hold the old fence")
     }
 
+    /// Review 3: a single fence circle (count 1) that moved, and a radius-only change of a circle; the last item is lost
+    /// until the vehicle times out and keeps its old fence. Neither may be reported as uploaded.
+    func testSingleFenceCircleAndRadiusChangeAreVerified() {
+        func circle(_ lat: Double, _ radius: Float, seq: UInt16 = 0) -> MissionItem {
+            MissionItem(seq: seq, frame: 0, command: MissionCmd.fenceCircleInclusion, param1: radius,
+                        latitude: lat, longitude: 149.16, missionType: .fence)
+        }
+        for (old, edited) in [([circle(-35.36, 50)], [circle(-35.30, 50)]),              // moved ~7 km, count 1
+                              ([circle(-35.36, 50)], [circle(-35.36, 20)])] {             // radius only
+            let v = SimulatedMissionVehicle(dropRate: 0)
+            v.arduPilotLike = true
+            v.writeThrough = true
+            v.stored[1] = old
+            v.dropSeq = edited.count - 1
+            let s = MissionSession(targetSystem: 1, config: .narrowLink)
+            let up = run(s, v, start: s.startUpload(.fence, items: edited, now: 0))
+            XCTAssertFalse(up.contains(.uploaded(type: .fence, count: edited.count)), "old fence reported as uploaded: \(up.suffix(2))")
+        }
+    }
+
     /// BUG-033: uploads to an ArduPilot-like vehicle at 30 % loss each way must all end "uploaded" (verified by read-back
     /// when the final ACK is lost), never "Invalid sequence" / "Error". Review 1: 200 runs, no failure allowed.
     func testUploadToArduPilotLikeVehicleSurvivesLoss() {

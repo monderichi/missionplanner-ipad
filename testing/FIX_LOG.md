@@ -79,3 +79,11 @@ Code comments at each change are tagged `// BUG-0xx:`.
 | 1 | Heartbeat confirmation of a superseding arm/disarm or mode command only counts after its ambiguity window (`CommandSession.confirmByState(_:now:)`, `CommandCenter.markSent`): a heartbeat from before the superseded command took effect can't confirm a lost DISARM. | `test_BUG002_forceDisarmNotAcceptedByArmAck` (no confirmation inside the window), `sitl_arm.sh` |
 | 2 | Fence uploads are verified by reading back **every** vertex (ArduPilot keeps the whole old fence on timeout); missions/rally keep the last-item check. | `testFenceUploadNotConfirmedWhenVehicleKeptOldFence`, `sitl_fence_rally.sh` |
 | opt. | Released queued commands ignore ACKs for a short window (a duplicate ACK of the previous one can't accept them); heartbeat marks the link alive before `armed`, so arm/disarm during a dropout is still announced; an old link's 50 ms flush no longer takes the new link's batch; read-back compares only the command for non-location items, rally altitude ±1 m; `Int()` of huge SERVOn_FUNCTION values clamped. | unit 60/60, fake drone 86/86, SITL 21/21, UI suite 1 9/9 |
+
+## Review 3 (testing/REVIEW_3.md): required changes applied
+
+| # | Change | Proof |
+|---|---|---|
+| 1 | The "count matches and ≤ 1 item → done" shortcut applies only to a home-only **mission**. A one-item fence (single circle) or rally upload is read back like any other. | `testSingleFenceCircleAndRadiusChangeAreVerified` (moved single circle) |
+| 2 | Fence read-back compares `param1`: circle radius ±1 m, vertex count of polygon vertices exact. | `testSingleFenceCircleAndRadiusChangeAreVerified` (radius-only change), `sitl_fence_rally.sh` |
+| opt. | The short ACK window for released queued commands was removed: ignoring a command's own fast ACK made each queued servo/motor/camera command go out twice. A rare duplicate ACK of the previous command is the smaller risk. | `test_BUG002_servoTapsAreNotDropped`, unit 61/61, fake drone 86/86, SITL subset 5/5 |

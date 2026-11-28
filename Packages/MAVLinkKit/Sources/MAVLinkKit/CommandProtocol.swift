@@ -149,9 +149,8 @@ public final class CommandSession {
                 events.append(.timedOut(command: cmd))
                 releaseQueued(cmd)
             } else {
-                // review 2: a released queued command's first send: a duplicate ACK of the previous one (same id) may
-                // still arrive, so its ACKs only count after a short window.
-                if p.attempts == 0 { p.ambiguousUntil = now + min(0.5, config.timeout / 3) }
+                // review 3: no ambiguity window for a released queued command: ignoring its own fast ACK made every one
+                // be sent twice (a repeated motor test / camera trigger is worse than a rare duplicate-ACK banner glitch).
                 p.attempts += 1
                 p.lastSent = now
                 p.message.confirmation = UInt8(min(255, max(0, p.attempts - 1))) // MAVLink: increment on resend

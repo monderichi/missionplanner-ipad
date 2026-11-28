@@ -115,3 +115,5 @@ The user's original request is kept verbatim at the end; the version below is th
   Verified: unit 60/60, fake drone 86/86, SITL 21/21, UI suite 1 9/9. Next: step 10 again (review 3).
 - 05:05 Review 3 running. CI break-test still hit the type-check timeout (immediately-invoked closure); probe table moved into a static function, pushed.
 - 08:20 Usage limit hit 05:0x–08:10 (review 3 agent stopped by rate limit; resumed). CI break-test still timed out type-checking one probe closure (DataFlash fuzz): moved to a typed function + raised the harness-only type-check threshold; pushed ec0f60d.
+- 08:35 Review 3: CHANGES REQUIRED (2, mission read-back: one-item fence/rally skipped verify; circle radius not compared). Both
+  applied + the optional queued-ACK-window removal. Verified: unit 61/61, fake drone 86/86, SITL subset 5/5. Next: review 4.
