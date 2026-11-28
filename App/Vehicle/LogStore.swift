@@ -12,7 +12,8 @@ final class LogStore: ObservableObject {
     @Published private(set) var received = 0
     @Published private(set) var rate: Double = 0   // bytes/s
     @Published var message: String?
-    static let maxDownloadBytes: UInt32 = 256 * 1_048_576 // BUG-019
+    /// BUG-019: downloads stream to a file now (no RAM copy); only keep this much disk space free for the system.
+    static let reserveBytes: Int64 = 200 * 1_048_576
 
     var send: ((MAVLinkMessage) -> Void)?
 
@@ -38,6 +39,7 @@ final class LogStore: ObservableObject {
 
     func detach() {
         if let d = download, d.active { d.cancel().forEach { send?($0) } }
+        discardPartial()
         system = nil
         list = nil
         download = nil
@@ -56,12 +58,16 @@ final class LogStore: ObservableObject {
 
     func start(_ entry: LogEntryInfo) {
         guard let system, download?.active != true else { return }
-        // BUG-019: the session keeps the whole log in RAM (plus a copy when saving); refuse sizes an iPad can't hold.
-        guard entry.size <= Self.maxDownloadBytes else {
-            message = "Log \(entry.id) is \(entry.size / 1_048_576) MB: too large to download over MAVLink here (limit \(Self.maxDownloadBytes / 1_048_576) MB). Copy it from the SD card instead."
+        // BUG-019: the log is written chunk by chunk to "<name>.partial" next to the final file, so its size is limited
+        // by free disk space, not RAM.
+        let dir = directory
+        if let free = (try? dir.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+            .volumeAvailableCapacityForImportantUsage, Int64(entry.size) > free - Self.reserveBytes {
+            message = "Log \(entry.id) is \(entry.size / 1_048_576) MB, but only \(max(0, free) / 1_048_576) MB are free on this iPad."
             return
         }
-        let s = LogDownloadSession(entry: entry, targetSystem: system, targetComponent: component)
+        let partial = dir.appendingPathComponent(fileName(entry) + ".partial")
+        let s = LogDownloadSession(entry: entry, targetSystem: system, targetComponent: component, fileURL: partial)
         download = s
         downloading = entry
         received = 0
@@ -69,10 +75,21 @@ final class LogStore: ObservableObject {
         started = Date()
         message = nil
         s.start(now: now).forEach { send?($0) }
+        if let why = s.startError {
+            message = "Download failed: \(why)"
+            download = nil
+            downloading = nil
+        }
+    }
+
+    /// Removes the unfinished file of the current download (cancel, failure, link change).
+    private func discardPartial() {
+        if let url = download?.fileURL { try? FileManager.default.removeItem(at: url) }
     }
 
     func cancel() {
         download?.cancel().forEach { send?($0) }
+        discardPartial()
         download = nil
         downloading = nil
         message = "Download cancelled"
@@ -138,8 +155,22 @@ final class LogStore: ObservableObject {
             }
             downloading = nil
             download = nil
+        case .finishedFile(let partial, let bytes):
+            guard let entry = downloading else { return }
+            let url = directory.appendingPathComponent(fileName(entry))
+            do {
+                if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+                try FileManager.default.moveItem(at: partial, to: url)
+                message = "Saved \(url.lastPathComponent) (\(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)))"
+            } catch {
+                message = "Save failed: \(error.localizedDescription)"
+                try? FileManager.default.removeItem(at: partial)
+            }
+            downloading = nil
+            download = nil
         case .failed(let why):
             message = "Download failed: \(why)"
+            discardPartial()
             downloading = nil
             download = nil
         }

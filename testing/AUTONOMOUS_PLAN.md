@@ -120,9 +120,11 @@ The user's original request is kept verbatim at the end; the version below is th
 - 08:55 CI green after 8931fcb (90 s reconnect param wait; ':' removed from log names). Review 4: CHANGES REQUIRED (1: a duplicate
   ACK could accept a released, still-unsent queued command). Fixed + seeded the lossy mission sim. Unit 63/63, fake drone 86/86,
   SITL subset 4/4. Next: review 5.
-- 09:15 User: no GitHub Actions minutes. Cancelled the running CI; `break-test` job made manual-only; pushes now use `[skip ci]`
+- 08:58 User: no GitHub Actions minutes. Cancelled the running CI; `break-test` job made manual-only; pushes now use `[skip ci]`
   and verification is local only. Review 5: CHANGES REQUIRED (1: the post-resend ACK window cascaded double sends down the
   queue). Window removed, unsent guard kept, test added. Unit 64/64, fake drone 86/86, SITL subset 3/3. Next: review 6.
-- 09:30 Review 6: APPROVED (REVIEW_5 item resolved; the new queue test fails on the old code, passes now). Step 11: squash-merged
+- 09:05 Review 6: APPROVED (REVIEW_5 item resolved; the new queue test fails on the old code, passes now). Step 11: squash-merged
   PR #1 into main as 0.5.0 with `[skip ci]` (no Actions minutes; start "Build Sideloadly IPA" manually for the IPA). Cleanup done:
   testing/.build, testing/artifacts, test crash reports removed; Xcode, testing/.sitl, testing/.venv kept.
+- 09:08 User: "Continue with a review and fix cycle until 10:00 closing as many bugs as possible." Round 2 on branch
+  `bug_fixes_2`: BUG-019 fixed (DataFlash streamed to file), REVIEW_5 optional 2/3. Unit 66/66, fake drone 86/86, SITL 3/3.

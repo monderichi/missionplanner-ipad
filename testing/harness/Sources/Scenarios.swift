@@ -482,6 +482,9 @@ enum Scenarios {
         let file = c.link.logs.directory.appendingPathComponent(c.link.logs.fileName(e))
         let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? -1
         c.check("D9 .bin written with right size", size == Int(e.size), "size=\(size) expected=\(e.size) msg=\(c.link.logs.message ?? "nil")")
+        // BUG-019: streamed to "<name>.partial", then moved: nothing unfinished is left next to the logs.
+        let left = ((try? FileManager.default.contentsOfDirectory(atPath: c.link.logs.directory.path)) ?? []).filter { $0.hasSuffix(".partial") }
+        c.check("D9 no .partial file left", left.isEmpty, "\(left)")
     }
 
     static func replay(_ c: Ctx) {

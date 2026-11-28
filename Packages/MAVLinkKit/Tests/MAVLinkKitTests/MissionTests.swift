@@ -209,6 +209,8 @@ final class MissionTests: XCTestCase {
             let s = MissionSession(targetSystem: 1, config: .narrowLink)
             let up = run(s, v, start: s.startUpload(.fence, items: edited, now: 0))
             XCTAssertFalse(up.contains(.uploaded(type: .fence, count: edited.count)), "old fence reported as uploaded: \(up.suffix(2))")
+            XCTAssertTrue(up.contains { if case .failed(_, let r) = $0 { return r.contains("differs") }; return false },
+                          "review 5: must fail in the read-back, not hang or fail elsewhere: \(up.suffix(2))")
         }
     }
 
@@ -224,6 +226,8 @@ final class MissionTests: XCTestCase {
         let s = MissionSession(targetSystem: 1, config: .narrowLink)
         let up = run(s, v, start: s.startUpload(.rally, items: edited, now: 0))
         XCTAssertFalse(up.contains(.uploaded(type: .rally, count: 1)), "old rally point reported as uploaded: \(up.suffix(2))")
+        XCTAssertTrue(up.contains { if case .failed(_, let r) = $0 { return r.contains("differs") }; return false },
+                      "review 5: must fail in the read-back: \(up.suffix(2))")
     }
 
     /// BUG-033: uploads to an ArduPilot-like vehicle at 30 % loss each way must all end "uploaded" (verified by read-back

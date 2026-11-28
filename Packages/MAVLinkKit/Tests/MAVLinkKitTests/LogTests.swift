@@ -123,4 +123,50 @@ final class LogTests: XCTestCase {
         let empty = LogDownloadSession(entry: LogEntryInfo(id: 9, size: 0, timeUtc: 0), targetSystem: 1)
         XCTAssertTrue(empty.start(now: 0).first is MAV.LogRequestEnd)
     }
+
+    /// BUG-019: file-backed download through 20 % loss, size reported 50 bytes too big: the file holds exactly the log
+    /// (chunks written in place, out of order), and nothing is kept in RAM.
+    func testFileBackedDownloadThroughLoss() throws {
+        var bytes = [UInt8](repeating: 0, count: 50_000)
+        for i in bytes.indices { bytes[i] = UInt8(truncatingIfNeeded: i * 13 + i / 77) }
+        let v = SimulatedLogVehicle(logs: [3: bytes], dropRate: 0.2)
+        v.reportedExtra = 50
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("logtest-\(UUID().uuidString).bin.partial")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let s = LogDownloadSession(entry: LogEntryInfo(id: 3, size: UInt32(bytes.count + 50), timeUtc: 0), targetSystem: 1,
+                                   fileURL: url)
+        var toSend = s.start(now: 0)
+        XCTAssertNil(s.startError)
+        var done: (URL, Int)?
+        let parser = MAVLinkParser()
+        var t: TimeInterval = 0
+        while done == nil && t < 2000 {
+            for r in v.receive(toSend.map { gcs.pack(any: $0) }) {
+                for p in parser.parse(r) {
+                    if let d = p.decode(MAV.LogData.self) {
+                        let h = s.handle(d, now: t)
+                        toSend += h.messages
+                        for ev in h.events { if case .finishedFile(let u, let n) = ev { done = (u, n) } }
+                    }
+                }
+            }
+            if done != nil { break }
+            t += 0.5
+            let r = s.tick(now: t)
+            toSend = r.messages
+            for ev in r.events { if case .failed(let why) = ev { XCTFail(why); return } }
+        }
+        XCTAssertEqual(done?.0, url)
+        XCTAssertEqual(done?.1, bytes.count)
+        XCTAssertEqual([UInt8](try Data(contentsOf: url)), bytes)
+    }
+
+    /// BUG-019: a file that can't be created fails at start, without sending a request.
+    func testFileBackedDownloadReportsUncreatableFile() {
+        let url = URL(fileURLWithPath: "/nonexistent-dir-\(UUID().uuidString)/log.partial")
+        let s = LogDownloadSession(entry: LogEntryInfo(id: 1, size: 900, timeUtc: 0), targetSystem: 1, fileURL: url)
+        XCTAssertTrue(s.start(now: 0).isEmpty)
+        XCTAssertNotNil(s.startError)
+        XCTAssertFalse(s.active)
+    }
 }

@@ -841,7 +841,7 @@ tagged `// BUG-0xx:` in the code. Verification on the fixed code:
 
 | Check | Before | After |
 |---|---|---|
-| Unit tests (`swift test` / stand-in) | 51 pass + 4 regression tests failing | **64/64 pass** (regression tests now in `Packages/MAVLinkKit/Tests`; after reviews 1–5) |
+| Unit tests (`swift test` / stand-in) | 51 pass + 4 regression tests failing | **66/66 pass** (regression tests now in `Packages/MAVLinkKit/Tests`; after reviews 1–5 and round 2) |
 | Fake-drone scenarios + probes (`run.py -j 4 all`) | 16 CRASH, 24 FAIL | **0 CRASH; 86/86 PASS** (the two by-design edge cases now assert the intended behaviour) |
 | ArduCopter/Rover/Sub 4.7.3 SITL (`run.py -j 4 sitl`) | lossy mission upload failed 4/5 | **21/21 PASS** incl. 3/3 lossy uploads with last-item read-back (BUG-033) |
 | Thread Sanitizer (6 link scenarios) | 4 races | **0 races** (BUG-032) |
@@ -870,7 +870,7 @@ Status per item: FIXED = code change + passing test; PARTIAL = improved, remaind
 | BUG-016 Link % | FIXED | BUG-038 NaN stick | FIXED |
 | BUG-017 lost ACK reporting | FIXED | BUG-039 ADS-B limits | FIXED |
 | BUG-018 battery calibration | FIXED | TEST-030 CI + app-layer tests | FIXED (CI `break-test` job) |
-| BUG-019 DataFlash memory | PARTIAL (256 MB limit; streaming to file left as follow-up) | TEST-031 identifiers | FIXED |
+| BUG-019 DataFlash memory | FIXED (round 2: streamed to a `.partial` file, free-space check; `testFileBackedDownloadThroughLoss`, `sitl_log_download`) | TEST-031 identifiers | FIXED |
 | BUG-020 non-finite params | FIXED | | |
 
 Not changed by design: aborting an upload when the vehicle asks for an item beyond the count (`mission_oob`), and
